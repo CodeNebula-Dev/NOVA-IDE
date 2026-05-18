@@ -1,15 +1,67 @@
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const fs = require("fs/promises");
+const fsSync = require("fs");
 const path = require("path");
 const pty = require("node-pty");
 const os = require("os");
+const crypto = require("crypto");
+const Database = require("better-sqlite3");
 
 let mainWindow;
 const ptyProcesses = new Map();
 
 let workspaceRoot = process.cwd();
+let db;
 
 const IGNORED_NAMES = new Set([".git", "node_modules", ".DS_Store"]);
+
+function initializeDatabase() {
+  const novaDir = path.join(workspaceRoot, ".nova");
+  if (!fsSync.existsSync(novaDir)) {
+    fsSync.mkdirSync(novaDir, { recursive: true });
+  }
+  
+  const dbPath = path.join(novaDir, "history.db");
+  db = new Database(dbPath);
+  
+  db.pragma("journal_mode = WAL");
+  
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      role TEXT CHECK(role IN ('user', 'assistant', 'system')) NOT NULL,
+      content TEXT NOT NULL,
+      model_name TEXT,
+      prompt_tokens INTEGER DEFAULT 0,
+      completion_tokens INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    );
+    
+    CREATE TABLE IF NOT EXISTS checkpoints (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT,
+      file_path TEXT NOT NULL,
+      original_sha TEXT NOT NULL,
+      backup_file_path TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL
+    );
+    
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_checkpoints_file ON checkpoints(file_path);
+  `);
+  
+  console.log("Database initialized at:", dbPath);
+}
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -27,7 +79,12 @@ function createMainWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, "renderer/index.html"));
+
+  mainWindow.webContents.on("console-message", (event, level, message, line, sourceId) => {
+    console.log(`[Renderer] ${message} (at ${sourceId}:${line})`);
+  });
 }
+
 
 function compareNodes(a, b) {
   if (a.type !== b.type) {
@@ -200,8 +257,69 @@ ipcMain.handle("terminal:resize", (event, id, cols, rows) => {
   }
 });
 
+// Chat Database IPC Handlers
+ipcMain.handle("chat:create-conversation", (event, title) => {
+  const id = crypto.randomUUID();
+  const stmt = db.prepare("INSERT INTO conversations (id, title) VALUES (?, ?)");
+  stmt.run(id, title);
+  return id;
+});
+
+ipcMain.handle("chat:get-conversations", () => {
+  const stmt = db.prepare("SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC");
+  return stmt.all();
+});
+
+ipcMain.handle("chat:get-conversation", (event, conversationId) => {
+  const stmt = db.prepare("SELECT * FROM conversations WHERE id = ?");
+  return stmt.get(conversationId);
+});
+
+ipcMain.handle("chat:update-conversation-title", (event, conversationId, title) => {
+  const stmt = db.prepare("UPDATE conversations SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+  stmt.run(title, conversationId);
+  return true;
+});
+
+ipcMain.handle("chat:delete-conversation", (event, conversationId) => {
+  const stmt = db.prepare("DELETE FROM conversations WHERE id = ?");
+  stmt.run(conversationId);
+  return true;
+});
+
+ipcMain.handle("chat:add-message", (event, conversationId, role, content, modelName) => {
+  const id = crypto.randomUUID();
+  const stmt = db.prepare(`
+    INSERT INTO messages (id, conversation_id, role, content, model_name)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  stmt.run(id, conversationId, role, content, modelName);
+  
+  const updateStmt = db.prepare("UPDATE conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+  updateStmt.run(conversationId);
+  
+  return id;
+});
+
+ipcMain.handle("chat:get-messages", (event, conversationId) => {
+  const stmt = db.prepare(`
+    SELECT id, role, content, model_name, prompt_tokens, completion_tokens, created_at
+    FROM messages
+    WHERE conversation_id = ?
+    ORDER BY created_at ASC
+  `);
+  return stmt.all(conversationId);
+});
+
+ipcMain.handle("chat:delete-message", (event, messageId) => {
+  const stmt = db.prepare("DELETE FROM messages WHERE id = ?");
+  stmt.run(messageId);
+  return true;
+});
+
 
 app.whenReady().then(() => {
+  initializeDatabase();
   createMainWindow();
 
   app.on("activate", () => {
