@@ -25,5 +25,17 @@ contextBridge.exposeInMainWorld("novaAPI", {
     const listener = (event, status) => callback(status);
     ipcRenderer.on(`terminal:exit:${id}`, listener);
     return () => ipcRenderer.removeListener(`terminal:exit:${id}`, listener);
+  },
+
+  // Chat Database API
+  chat: {
+    createConversation: (title) => ipcRenderer.invoke("chat:create-conversation", title),
+    getConversations: () => ipcRenderer.invoke("chat:get-conversations"),
+    getConversation: (conversationId) => ipcRenderer.invoke("chat:get-conversation", conversationId),
+    updateConversationTitle: (conversationId, title) => ipcRenderer.invoke("chat:update-conversation-title", conversationId, title),
+    deleteConversation: (conversationId) => ipcRenderer.invoke("chat:delete-conversation", conversationId),
+    addMessage: (conversationId, role, content, modelName) => ipcRenderer.invoke("chat:add-message", conversationId, role, content, modelName),
+    getMessages: (conversationId) => ipcRenderer.invoke("chat:get-messages", conversationId),
+    deleteMessage: (messageId) => ipcRenderer.invoke("chat:delete-message", messageId)
   }
 });

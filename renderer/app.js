@@ -83,7 +83,9 @@ const state = {
   chatMessages: [],
   apiMessages: [],
   savingPaths: new Set(),
-  editor: null // Monaco editor instance reference
+  editor: null, // Monaco editor instance reference
+  currentConversationId: null,
+  conversations: []
 };
 
 const saveTimers = new Map();
@@ -94,8 +96,15 @@ const els = {
   openWorkspaceBtn: document.getElementById("openWorkspaceBtn"),
   refreshWorkspaceBtn: document.getElementById("refreshWorkspaceBtn"),
   terminalToggleBtn: document.getElementById("terminalToggleBtn"),
+  settingsBtn: document.getElementById("settingsBtn"),
   terminalPanel: document.getElementById("terminalPanel"),
   xtermTerminalContainer: document.getElementById("xtermTerminalContainer"),
+  settingsModal: document.getElementById("settingsModal"),
+  closeSettingsBtn: document.getElementById("closeSettingsBtn"),
+  saveSettingsBtn: document.getElementById("saveSettingsBtn"),
+  themeSelect: document.getElementById("themeSelect"),
+  fontSizeSelect: document.getElementById("fontSizeSelect"),
+  panelWidthSelect: document.getElementById("panelWidthSelect"),
   fileTree: document.getElementById("fileTree"),
   newFileBtn: document.getElementById("newFileBtn"),
   newFolderBtn: document.getElementById("newFolderBtn"),
@@ -111,6 +120,8 @@ const els = {
   openRouterKeyInput: document.getElementById("openRouterKeyInput"),
   modelHint: document.getElementById("modelHint"),
   contextFileLabel: document.getElementById("contextFileLabel"),
+  conversationList: document.getElementById("conversationList"),
+  newConversationBtn: document.getElementById("newConversationBtn"),
   chatMessages: document.getElementById("chatMessages"),
   agentInput: document.getElementById("agentInput"),
   sendAgentBtn: document.getElementById("sendAgentBtn"),
@@ -134,11 +145,17 @@ async function init() {
   // 1. Initialize Monaco Editor
   await initMonaco();
 
-  // 2. Fetch File tree
+  // 2. Load stored settings (now that Monaco is fully initialized!)
+  loadSettings();
+
+  // 3. Load conversations from database
+  await loadConversations();
+
+  // 3. Fetch File tree
   state.workspaceRoot = await window.novaAPI.getWorkspaceRoot();
   await refreshWorkspaceTree();
 
-  // 3. Auto-open first workspace file
+  // 4. Auto-open first workspace file
   const firstFile = findFirstFilePath(state.tree);
   if (firstFile) {
     await openFile(firstFile);
@@ -146,7 +163,7 @@ async function init() {
     clearEditor();
   }
 
-  addChatMessage("assistant", "Nova agent is ready. I’ll include the active Monaco file as context in every request.");
+  addChatMessage("assistant", "Nova agent is ready. I'll include the active Monaco file as context in every request.");
   updateStatusBar();
 }
 
@@ -159,7 +176,7 @@ function initMonaco() {
       state.editor = monaco.editor.create(els.monacoEditorContainer, {
         value: "",
         language: "plaintext",
-        theme: "vs-dark",
+        theme: els.themeSelect.value || "vs-dark",
         automaticLayout: true,
         minimap: { enabled: false },
         fontSize: 14,
@@ -279,6 +296,14 @@ function bindEvents() {
     }
   });
   els.applyToFileBtn.addEventListener("click", applySuggestedContentToFile);
+  els.newConversationBtn.addEventListener("click", createNewConversation);
+  els.settingsBtn.addEventListener("click", () => {
+    els.settingsModal.classList.remove("hidden");
+  });
+  els.closeSettingsBtn.addEventListener("click", () => {
+    els.settingsModal.classList.add("hidden");
+  });
+  els.saveSettingsBtn.addEventListener("click", saveSettings);
 
   els.terminalToggleBtn.addEventListener("click", () => {
     state.terminalVisible = !state.terminalVisible;
@@ -756,6 +781,133 @@ function syncProviderUI() {
     : `Pollinations model: ${model.pollinationsModel} (no API key required).`;
 }
 
+async function loadConversations() {
+  try {
+    state.conversations = await window.novaAPI.chat.getConversations();
+    
+    if (state.conversations.length === 0) {
+      const newConversationId = await window.novaAPI.chat.createConversation("New Conversation");
+      state.currentConversationId = newConversationId;
+      state.conversations = await window.novaAPI.chat.getConversations();
+    } else {
+      state.currentConversationId = state.conversations[0].id;
+      await loadConversationMessages(state.currentConversationId);
+    }
+    renderConversationList();
+  } catch (error) {
+    console.error("Failed to load conversations:", error);
+    addChatMessage("system", "Failed to load conversation history from database.");
+  }
+}
+
+function renderConversationList() {
+  els.conversationList.innerHTML = "";
+  
+  for (const conversation of state.conversations) {
+    const item = document.createElement("div");
+    item.className = `conversation-item ${conversation.id === state.currentConversationId ? "active" : ""}`;
+    
+    const title = document.createElement("span");
+    title.className = "conversation-item-title";
+    title.textContent = conversation.title;
+    title.title = "Double-click to rename";
+    title.addEventListener("dblclick", async (event) => {
+      event.stopPropagation();
+      const newTitle = prompt("Rename conversation:", conversation.title);
+      if (newTitle && newTitle.trim()) {
+        try {
+          await window.novaAPI.chat.updateConversationTitle(conversation.id, newTitle.trim());
+          state.conversations = await window.novaAPI.chat.getConversations();
+          renderConversationList();
+        } catch (error) {
+          console.error("Failed to rename conversation:", error);
+        }
+      }
+    });
+    
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "conversation-item-delete";
+    deleteBtn.textContent = "×";
+    deleteBtn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (confirm(`Delete conversation "${conversation.title}"?`)) {
+        try {
+          await window.novaAPI.chat.deleteConversation(conversation.id);
+          state.conversations = await window.novaAPI.chat.getConversations();
+          if (state.currentConversationId === conversation.id) {
+            state.currentConversationId = state.conversations[0]?.id || null;
+            if (state.currentConversationId) {
+              await loadConversationMessages(state.currentConversationId);
+            } else {
+              state.chatMessages = [];
+              state.apiMessages = [];
+              renderChatMessages();
+            }
+          }
+          renderConversationList();
+        } catch (error) {
+          console.error("Failed to delete conversation:", error);
+          addChatMessage("system", "Failed to delete conversation.");
+        }
+      }
+    });
+    
+    item.addEventListener("click", () => {
+      switchConversation(conversation.id);
+    });
+    
+    item.append(title, deleteBtn);
+    els.conversationList.appendChild(item);
+  }
+}
+
+async function loadConversationMessages(conversationId) {
+  try {
+    const messages = await window.novaAPI.chat.getMessages(conversationId);
+    state.chatMessages = messages.map(msg => ({
+      role: msg.role,
+      content: msg.content
+    }));
+    state.apiMessages = messages.map(msg => ({
+      role: msg.role,
+      content: msg.content
+    }));
+    renderChatMessages();
+  } catch (error) {
+    console.error("Failed to load messages:", error);
+  }
+}
+
+async function createNewConversation() {
+  try {
+    const title = prompt("Enter conversation title:", "New Conversation");
+    if (!title) return;
+    
+    const newConversationId = await window.novaAPI.chat.createConversation(title);
+    state.currentConversationId = newConversationId;
+    state.chatMessages = [];
+    state.apiMessages = [];
+    state.conversations = await window.novaAPI.chat.getConversations();
+    renderConversationList();
+    renderChatMessages();
+    addChatMessage("assistant", "Started a new conversation. I'll include the active Monaco file as context in every request.");
+  } catch (error) {
+    console.error("Failed to create conversation:", error);
+    addChatMessage("system", "Failed to create new conversation.");
+  }
+}
+
+async function switchConversation(conversationId) {
+  try {
+    state.currentConversationId = conversationId;
+    await loadConversationMessages(conversationId);
+    renderConversationList();
+  } catch (error) {
+    console.error("Failed to switch conversation:", error);
+    addChatMessage("system", "Failed to switch conversation.");
+  }
+}
+
 function addChatMessage(role, content) {
   state.chatMessages.push({ role, content });
   renderChatMessages();
@@ -791,6 +943,36 @@ function buildModeInstruction() {
   }
 }
 
+function buildFileTreeContext() {
+  if (!state.tree) {
+    return "";
+  }
+
+  const files = [];
+  function collectFiles(node, depth = 0) {
+    if (node.type === "file") {
+      files.push("  ".repeat(depth) + node.path);
+    } else if (node.type === "folder" && Array.isArray(node.children)) {
+      files.push("  ".repeat(depth) + node.path + "/");
+      for (const child of node.children) {
+        collectFiles(child, depth + 1);
+      }
+    }
+  }
+
+  collectFiles(state.tree);
+
+  if (files.length === 0) {
+    return "";
+  }
+
+  return [
+    "Workspace file tree:",
+    ...files.slice(0, 50),
+    files.length > 50 ? `... and ${files.length - 50} more files` : ""
+  ].join("\n");
+}
+
 function buildCurrentFileContext() {
   const activeTab = getActiveTab();
   if (!activeTab) {
@@ -798,18 +980,43 @@ function buildCurrentFileContext() {
   }
 
   const language = getLanguageForPath(activeTab.path);
+  const cursor = getCursorPosition();
+  const selection = state.editor ? state.editor.getSelection() : null;
+  let selectedText = "";
+
+  if (selection && !selection.isEmpty()) {
+    selectedText = state.editor.getModel().getValueInRange(selection);
+  }
+
   const content = activeTab.content.length > 12000
     ? `${activeTab.content.slice(0, 12000)}\n...[truncated]`
     : activeTab.content;
 
-  return [
+  const contextParts = [
+    buildFileTreeContext(),
+    "",
     `Current file: ${activeTab.path}`,
     `Language: ${language}`,
+    `Cursor position: Line ${cursor.line}, Column ${cursor.column}`
+  ];
+
+  if (selectedText) {
+    contextParts.push(
+      "Selected text:",
+      "```",
+      selectedText,
+      "```"
+    );
+  }
+
+  contextParts.push(
     "File content:",
     `\`\`\`${language}`,
     content,
     "```"
-  ].join("\n");
+  );
+
+  return contextParts.join("\n");
 }
 
 function buildSystemPrompt() {
@@ -825,6 +1032,18 @@ async function handleSendToAgent() {
   addChatMessage("user", prompt);
   els.agentInput.value = "";
   setAgentBusy(true);
+
+  // Save user message to database immediately
+  if (state.currentConversationId) {
+    try {
+      await window.novaAPI.chat.addMessage(state.currentConversationId, "user", prompt, MODEL_CONFIG[state.modelKey].label);
+      // Reload conversations list to update timestamp
+      state.conversations = await window.novaAPI.chat.getConversations();
+      renderConversationList();
+    } catch (dbError) {
+      console.error("Failed to save user message to database:", dbError);
+    }
+  }
 
   const composedPrompt = [
     buildModeInstruction(),
@@ -858,12 +1077,25 @@ async function handleSendToAgent() {
     addChatMessage("assistant", response);
     state.pendingApplyContent = extractCodeFromResponse(response);
     updateApplyButtonState();
+
+    // Save assistant message to database
+    if (state.currentConversationId) {
+      try {
+        await window.novaAPI.chat.addMessage(state.currentConversationId, "assistant", response, MODEL_CONFIG[state.modelKey].label);
+        // Reload conversations list to update timestamp
+        state.conversations = await window.novaAPI.chat.getConversations();
+        renderConversationList();
+      } catch (dbError) {
+        console.error("Failed to save assistant message to database:", dbError);
+      }
+    }
   } catch (error) {
     addChatMessage("system", `Agent request failed: ${error.message}`);
   } finally {
     setAgentBusy(false);
   }
 }
+
 
 async function callPollinations(messages) {
   const model = MODEL_CONFIG[state.modelKey].pollinationsModel;
@@ -1001,4 +1233,57 @@ function findFirstFilePath(node) {
     }
   }
   return null;
+}
+
+function loadSettings() {
+  const settings = JSON.parse(localStorage.getItem("novaSettings") || "{}");
+  
+  if (settings.theme) {
+    els.themeSelect.value = settings.theme;
+    applyTheme(settings.theme);
+  }
+  
+  if (settings.fontSize) {
+    els.fontSizeSelect.value = settings.fontSize;
+    applyFontSize(settings.fontSize);
+  }
+  
+  if (settings.panelWidth) {
+    els.panelWidthSelect.value = settings.panelWidth;
+    applyPanelWidth(settings.panelWidth);
+  }
+}
+
+function saveSettings() {
+  const settings = {
+    theme: els.themeSelect.value,
+    fontSize: els.fontSizeSelect.value,
+    panelWidth: els.panelWidthSelect.value
+  };
+  
+  localStorage.setItem("novaSettings", JSON.stringify(settings));
+  
+  applyTheme(settings.theme);
+  applyFontSize(settings.fontSize);
+  applyPanelWidth(settings.panelWidth);
+  
+  els.settingsModal.classList.add("hidden");
+  addChatMessage("system", "Settings saved successfully.");
+}
+
+function applyTheme(theme) {
+  if (state.editor) {
+    monaco.editor.setTheme(theme);
+  }
+}
+
+function applyFontSize(fontSize) {
+  if (state.editor) {
+    state.editor.updateOptions({ fontSize: parseInt(fontSize) });
+  }
+}
+
+function applyPanelWidth(panelWidth) {
+  const width = parseInt(panelWidth);
+  document.querySelector(".ide-grid").style.gridTemplateColumns = `${width}px 1fr ${width}px`;
 }

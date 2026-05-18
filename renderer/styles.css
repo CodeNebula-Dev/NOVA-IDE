@@ -372,6 +372,62 @@ select {
   color: #c9d6ff;
 }
 
+.conversation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.82rem;
+  color: #bac8ea;
+}
+
+.conversation-list {
+  max-height: 150px;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--line);
+}
+
+.conversation-item {
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 0.84rem;
+  border-bottom: 1px solid rgba(36, 43, 61, 0.5);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.conversation-item:hover {
+  background: #1c2234;
+}
+
+.conversation-item.active {
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+}
+
+.conversation-item-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-item-delete {
+  border: none;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 0.8rem;
+  opacity: 0.6;
+}
+
+.conversation-item-delete:hover {
+  opacity: 1;
+}
+
 .chat-messages {
   flex: 1;
   min-height: 0;
@@ -478,7 +534,77 @@ select {
 }
 
 .hidden {
-  display: none;
+  display: none !important;
+}
+
+
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  min-width: 400px;
+  max-width: 500px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-header h2 {
+  font-size: 1.1rem;
+  margin: 0;
+  font-weight: 600;
+}
+
+.modal-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.modal-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: #bac8ea;
+}
+
+.modal-body select {
+  background: #101522;
+  border: 1px solid #29314a;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 0.9rem;
+}
+
+.modal-footer {
+  padding: 16px 20px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: flex-end;
 }
 
 @media (max-width: 1320px) {
