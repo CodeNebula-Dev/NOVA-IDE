@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nova IDE</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="../node_modules/xterm/css/xterm.css" />
+    <script src="../node_modules/xterm/lib/xterm.js"></script>
+    <script src="../node_modules/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+    <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-pulse"></span>
+          <h1>Nova IDE</h1>
+        </div>
+        <div class="workspace-controls">
+          <span id="workspaceLabel" class="workspace-label"></span>
+          <button id="openWorkspaceBtn" class="secondary-btn">Open Folder</button>
+          <button id="refreshWorkspaceBtn" class="secondary-btn">Refresh</button>
+          <button id="terminalToggleBtn" class="secondary-btn">Terminal</button>
+        </div>
+      </header>
+
+      <main class="ide-grid">
+        <aside class="panel panel-left">
+          <div class="panel-header">
+            <h2>File Manager</h2>
+            <div class="panel-actions">
+              <button id="newFileBtn" class="secondary-btn">+ File</button>
+              <button id="newFolderBtn" class="secondary-btn">+ Folder</button>
+            </div>
+          </div>
+          <div id="fileTree" class="file-tree"></div>
+        </aside>
+
+        <section class="panel panel-center">
+          <div id="tabsBar" class="tabs-bar"></div>
+          <div class="editor-shell">
+            <div id="monacoEditorContainer" style="flex: 1; height: 100%; width: 100%;"></div>
+          </div>
+          <div class="status-bar">
+            <span id="statusLanguage">plaintext</span>
+            <span id="statusCursor">Ln 1, Col 1</span>
+            <span id="statusEncoding">UTF-8</span>
+          </div>
+        </section>
+
+        <aside class="panel panel-right">
+          <div class="panel-header">
+            <h2>AI Agent</h2>
+            <div class="agent-status">
+              <span id="agentStatusDot" class="status-dot"></span>
+              <span id="agentStatusText">Ready</span>
+            </div>
+          </div>
+
+          <div class="agent-controls">
+            <label>
+              Provider
+              <select id="providerSelect">
+                <option value="pollinations">Pollinations (No Key)</option>
+                <option value="openrouter">OpenRouter (Free Tier)</option>
+              </select>
+            </label>
+
+            <label>
+              Model
+              <select id="modelSelect"></select>
+            </label>
+
+            <label>
+              Mode
+              <select id="modeSelect">
+                <option value="chat">Chat</option>
+                <option value="edit">Edit</option>
+                <option value="explain">Explain</option>
+                <option value="debug">Debug</option>
+              </select>
+            </label>
+
+            <label id="openRouterKeyWrap" class="hidden">
+              OpenRouter API Key
+              <input id="openRouterKeyInput" type="password" placeholder="sk-or-..." autocomplete="off" />
+            </label>
+
+            <p id="modelHint" class="hint-text"></p>
+            <p class="context-label">
+              Context file:
+              <code id="contextFileLabel">No file selected</code>
+            </p>
+          </div>
+
+          <div id="chatMessages" class="chat-messages"></div>
+
+          <div class="chat-composer">
+            <textarea id="agentInput" placeholder="Ask the agent to chat, edit, explain, or debug..."></textarea>
+            <div class="chat-actions">
+              <button id="sendAgentBtn" class="primary-btn">Send</button>
+              <button id="applyToFileBtn" class="accent-btn" disabled>Apply to file</button>
+            </div>
+          </div>
+        </aside>
+      </main>
+
+      <section id="terminalPanel" class="terminal-panel hidden">
+        <div class="terminal-header">Nova Terminal (Workspace Helper)</div>
+        <div id="xtermTerminalContainer" style="flex: 1; overflow: hidden; padding: 6px; background: #0a0d13;"></div>
+      </section>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
