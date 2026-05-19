@@ -616,3 +616,172 @@ select {
     display: none;
   }
 }
+
+/* ⚡ Valkyrie Multi-Agent Interface Styling */
+.message.valkyrie-message {
+  background: rgba(124, 106, 255, 0.08) !important;
+  border: 1px solid rgba(124, 106, 255, 0.35) !important;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+  padding: 12px !important;
+  margin: 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-radius: 12px;
+}
+
+.valkyrie-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(124, 106, 255, 0.2);
+  padding-bottom: 8px;
+  font-weight: 700;
+  color: #fff;
+  font-size: 0.88rem;
+}
+
+.valkyrie-header .abort-btn {
+  background: var(--danger);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.valkyrie-header .abort-btn:hover {
+  background: #ff3344;
+}
+
+.valkyrie-thought-section {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 0.8rem;
+}
+
+.valkyrie-thought-section .thought-title {
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.valkyrie-thought-section .thought-content {
+  margin-top: 6px;
+  max-height: 120px;
+  overflow-y: auto;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.76rem;
+  color: #a4b3dc;
+  white-space: pre-wrap;
+}
+
+.valkyrie-thought-section.closed .thought-content {
+  display: none;
+}
+
+.valkyrie-plan-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.valkyrie-plan-section .section-title,
+.valkyrie-diff-section .section-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #bac8ea;
+}
+
+.valkyrie-plan-section .plan-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.valkyrie-plan-section .plan-item {
+  font-size: 0.78rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: #c9d5ff;
+}
+
+.valkyrie-plan-section .plan-item .status-icon {
+  font-weight: bold;
+}
+
+.valkyrie-plan-section .plan-item.completed {
+  color: var(--good);
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+
+.valkyrie-plan-section .plan-item.in-progress {
+  color: #ffc945;
+  font-weight: 600;
+}
+
+.valkyrie-diff-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.valkyrie-diff-section .diff-content {
+  background: #090c12;
+  border: 1px solid #1c2336;
+  border-radius: 8px;
+  padding: 8px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.76rem;
+  max-height: 140px;
+  overflow-y: auto;
+  color: #79a1ff;
+  white-space: pre;
+}
+
+.valkyrie-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: #bac8ea;
+  border-top: 1px solid rgba(124, 106, 255, 0.15);
+  padding-top: 8px;
+}
+
+.valkyrie-status-bar .status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.valkyrie-status-bar .status-dot.pulsing {
+  animation: valkyrie-pulse 1.3s infinite ease-in-out;
+}
+
+@keyframes valkyrie-pulse {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+    background: #ffc945;
+  }
+}
+

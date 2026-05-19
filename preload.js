@@ -37,5 +37,32 @@ contextBridge.exposeInMainWorld("novaAPI", {
     addMessage: (conversationId, role, content, modelName) => ipcRenderer.invoke("chat:add-message", conversationId, role, content, modelName),
     getMessages: (conversationId) => ipcRenderer.invoke("chat:get-messages", conversationId),
     deleteMessage: (messageId) => ipcRenderer.invoke("chat:delete-message", messageId)
+  },
+
+  // Valkyrie Agent Harness API
+  valkyrie: {
+    execute: (conversationId, prompt, activeFilePath, apiKeys) => 
+      ipcRenderer.invoke("valkyrie:execute", conversationId, prompt, activeFilePath, apiKeys),
+    abort: () => ipcRenderer.invoke("valkyrie:abort"),
+    getEnvKeys: () => ipcRenderer.invoke("valkyrie:get-env-keys"),
+    
+    // Global Orchestration Streaming Events
+    onEvent: (channel, callback) => {
+      const allowedChannels = [
+        "valkyrie:thought-chunk",
+        "valkyrie:plan-update",
+        "valkyrie:task-update",
+        "valkyrie:diff-chunk",
+        "valkyrie:review-status",
+        "valkyrie:status",
+        "valkyrie:completed",
+        "valkyrie:error"
+      ];
+      if (!allowedChannels.includes(channel)) return () => {};
+      
+      const listener = (event, data) => callback(data);
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    }
   }
 });

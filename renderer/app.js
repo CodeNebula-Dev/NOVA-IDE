@@ -118,6 +118,12 @@ const els = {
   modeSelect: document.getElementById("modeSelect"),
   openRouterKeyWrap: document.getElementById("openRouterKeyWrap"),
   openRouterKeyInput: document.getElementById("openRouterKeyInput"),
+  groqKeyWrap: document.getElementById("groqKeyWrap"),
+  groqKeyInput: document.getElementById("groqKeyInput"),
+  diffControlBar: document.getElementById("diffControlBar"),
+  acceptDiffBtn: document.getElementById("acceptDiffBtn"),
+  rejectDiffBtn: document.getElementById("rejectDiffBtn"),
+  monacoDiffContainer: document.getElementById("monacoDiffContainer"),
   modelHint: document.getElementById("modelHint"),
   contextFileLabel: document.getElementById("contextFileLabel"),
   conversationList: document.getElementById("conversationList"),
@@ -142,6 +148,20 @@ async function init() {
   bindEvents();
   syncProviderUI();
 
+  // Load API Keys from Environment Variables (fallback to LocalStorage)
+  try {
+    const envKeys = await window.novaAPI.valkyrie.getEnvKeys();
+    els.openRouterKeyInput.value = envKeys.openrouter || localStorage.getItem("openRouterKey") || "";
+    if (els.groqKeyInput) {
+      els.groqKeyInput.value = envKeys.groq || localStorage.getItem("groqKey") || "";
+    }
+  } catch (err) {
+    els.openRouterKeyInput.value = localStorage.getItem("openRouterKey") || "";
+    if (els.groqKeyInput) {
+      els.groqKeyInput.value = localStorage.getItem("groqKey") || "";
+    }
+  }
+
   // 1. Initialize Monaco Editor
   await initMonaco();
 
@@ -161,6 +181,34 @@ async function init() {
     await openFile(firstFile);
   } else {
     clearEditor();
+  }
+
+  // 5. Register Valkyrie events
+  if (window.novaAPI.valkyrie) {
+    window.novaAPI.valkyrie.onEvent("valkyrie:thought-chunk", (data) => {
+      updateActiveValkyrieCard('thought', data.chunk);
+    });
+    window.novaAPI.valkyrie.onEvent("valkyrie:plan-update", (data) => {
+      updateActiveValkyrieCard('plan', data.plan);
+    });
+    window.novaAPI.valkyrie.onEvent("valkyrie:task-update", (data) => {
+      updateActiveValkyrieCard('task', data);
+    });
+    window.novaAPI.valkyrie.onEvent("valkyrie:diff-chunk", (data) => {
+      updateActiveValkyrieCard('diff', data.chunk);
+    });
+    window.novaAPI.valkyrie.onEvent("valkyrie:review-status", (data) => {
+      updateActiveValkyrieCard('review', data);
+    });
+    window.novaAPI.valkyrie.onEvent("valkyrie:status", (data) => {
+      updateActiveValkyrieCard('status', data.message);
+    });
+    window.novaAPI.valkyrie.onEvent("valkyrie:completed", (data) => {
+      updateActiveValkyrieCard('completed', data);
+    });
+    window.novaAPI.valkyrie.onEvent("valkyrie:error", (data) => {
+      updateActiveValkyrieCard('error', data.message);
+    });
   }
 
   addChatMessage("assistant", "Nova agent is ready. I'll include the active Monaco file as context in every request.");
@@ -287,6 +335,7 @@ function bindEvents() {
   });
   els.modeSelect.addEventListener("change", () => {
     state.mode = els.modeSelect.value;
+    syncProviderUI();
   });
   els.sendAgentBtn.addEventListener("click", handleSendToAgent);
   els.agentInput.addEventListener("keydown", (event) => {
@@ -323,6 +372,40 @@ function bindEvents() {
         }, 50);
       }
     }
+  });
+
+  els.openRouterKeyInput.addEventListener("input", () => {
+    localStorage.setItem("openRouterKey", els.openRouterKeyInput.value);
+  });
+  if (els.groqKeyInput) {
+    els.groqKeyInput.addEventListener("input", () => {
+      localStorage.setItem("groqKey", els.groqKeyInput.value);
+    });
+  }
+
+  els.acceptDiffBtn.addEventListener("click", () => {
+    hideDiffEditor();
+    addChatMessage("system", "Proposed changes accepted and committed.");
+  });
+
+  els.rejectDiffBtn.addEventListener("click", async () => {
+    if (valkyrieSession.activeFilePath && valkyrieSession.originalContent !== null) {
+      try {
+        await window.novaAPI.writeFile(valkyrieSession.activeFilePath, valkyrieSession.originalContent);
+        
+        // Restore tab state and editor state
+        const activeTab = getActiveTab();
+        if (activeTab && activeTab.path === valkyrieSession.activeFilePath) {
+          activeTab.content = valkyrieSession.originalContent;
+          activeTab.dirty = false;
+          renderTabs();
+        }
+        addChatMessage("system", "Proposed changes rejected and rolled back.");
+      } catch (err) {
+        addChatMessage("system", `Failed to roll back changes: ${err.message}`);
+      }
+    }
+    hideDiffEditor();
   });
 }
 
@@ -774,11 +857,22 @@ function renderModelOptions() {
 function syncProviderUI() {
   const model = MODEL_CONFIG[state.modelKey];
   const isOpenRouter = state.provider === "openrouter";
+  const isEditMode = state.mode === "edit";
+  
+  const showKeys = isOpenRouter || isEditMode;
 
-  els.openRouterKeyWrap.classList.toggle("hidden", !isOpenRouter);
-  els.modelHint.textContent = isOpenRouter
-    ? `OpenRouter model: ${model.openrouterModel} (free-tier availability can vary).`
-    : `Pollinations model: ${model.pollinationsModel} (no API key required).`;
+  els.openRouterKeyWrap.classList.toggle("hidden", !showKeys);
+  if (els.groqKeyWrap) {
+    els.groqKeyWrap.classList.toggle("hidden", !showKeys);
+  }
+  
+  if (isEditMode) {
+    els.modelHint.textContent = "⚡ Edit mode activates the Valkyrie Multi-Agent cohort (DeepSeek R1 + Qwen Coder + Llama 3.3). API Keys are required.";
+  } else {
+    els.modelHint.textContent = isOpenRouter
+      ? `OpenRouter model: ${model.openrouterModel} (free-tier availability can vary).`
+      : `Pollinations model: ${model.pollinationsModel} (no API key required).`;
+  }
 }
 
 async function loadConversations() {
@@ -1031,6 +1125,63 @@ async function handleSendToAgent() {
 
   addChatMessage("user", prompt);
   els.agentInput.value = "";
+
+  if (state.mode === "edit") {
+    if (state.currentConversationId) {
+      try {
+        await window.novaAPI.chat.addMessage(state.currentConversationId, "user", prompt, "Valkyrie");
+        state.conversations = await window.novaAPI.chat.getConversations();
+        renderConversationList();
+      } catch (dbError) {
+        console.error("Failed to save user message to database:", dbError);
+      }
+    }
+
+    setAgentBusy(true);
+    createValkyrieCard(prompt);
+
+    const activeTab = getActiveTab();
+    const activeFilePath = activeTab ? activeTab.path : null;
+    
+    // Capture initial state for side-by-side diffing and rollback capability
+    valkyrieSession.activeFilePath = activeFilePath;
+    valkyrieSession.originalContent = activeTab ? activeTab.content : "";
+    
+    const apiKeys = {
+      openrouter: els.openRouterKeyInput.value.trim(),
+      groq: els.groqKeyInput ? els.groqKeyInput.value.trim() : ""
+    };
+
+    try {
+      
+      const results = await window.novaAPI.valkyrie.execute(
+        state.currentConversationId,
+        prompt,
+        activeFilePath,
+        apiKeys
+      );
+
+      if (results && results.length > 0) {
+        const summary = `⚡ Valkyrie multi-agent completed execution:\n` + 
+          results.map(r => `- ${r.task.description} in \`${r.filePath}\``).join("\n");
+          
+        addChatMessage("assistant", summary);
+        
+        if (state.currentConversationId) {
+          await window.novaAPI.chat.addMessage(state.currentConversationId, "assistant", summary, "Valkyrie");
+          state.conversations = await window.novaAPI.chat.getConversations();
+          renderConversationList();
+        }
+      }
+    } catch (error) {
+      updateActiveValkyrieCard('error', error.message);
+      addChatMessage("system", `Valkyrie failed: ${error.message}`);
+    } finally {
+      setAgentBusy(false);
+    }
+    return;
+  }
+
   setAgentBusy(true);
 
   // Save user message to database immediately
@@ -1098,7 +1249,8 @@ async function handleSendToAgent() {
 
 
 async function callPollinations(messages) {
-  const model = MODEL_CONFIG[state.modelKey].pollinationsModel;
+  // Anonymous pollinations text API only supports 'openai-fast' (aliased as 'openai')
+  const model = "openai"; 
   const response = await fetch("https://text.pollinations.ai/", {
     method: "POST",
     headers: {
@@ -1286,4 +1438,240 @@ function applyFontSize(fontSize) {
 function applyPanelWidth(panelWidth) {
   const width = parseInt(panelWidth);
   document.querySelector(".ide-grid").style.gridTemplateColumns = `${width}px 1fr ${width}px`;
+}
+
+// --- Valkyrie Agent Harness UI Management ---
+let activeValkyrieCard = null;
+let valkyrieThoughtBuffer = "";
+let valkyrieDiffBuffer = "";
+
+function createValkyrieCard(userPrompt) {
+  valkyrieThoughtBuffer = "";
+  valkyrieDiffBuffer = "";
+  
+  const card = document.createElement("div");
+  card.className = "message valkyrie-message";
+  card.innerHTML = `
+    <div class="valkyrie-header">
+      <span class="valkyrie-icon">⚡</span>
+      <span>Valkyrie Engine</span>
+      <button class="abort-btn">Abort</button>
+    </div>
+    <div class="valkyrie-thought-section closed">
+      <div class="thought-title">▶ Thought Logs (DeepSeek R1)</div>
+      <div class="thought-content"></div>
+    </div>
+    <div class="valkyrie-plan-section hidden">
+      <div class="section-title">📋 Execution Plan</div>
+      <ul class="plan-list"></ul>
+    </div>
+    <div class="valkyrie-diff-section hidden">
+      <div class="section-title">🔍 Surgical Diffs</div>
+      <div class="diff-content"></div>
+    </div>
+    <div class="valkyrie-status-bar">
+      <span class="status-dot pulsing"></span>
+      <span class="status-text">Orchestrator preparing...</span>
+    </div>
+  `;
+  
+  // Thought toggle
+  const thoughtTitle = card.querySelector(".thought-title");
+  const thoughtSection = card.querySelector(".valkyrie-thought-section");
+  thoughtTitle.addEventListener("click", () => {
+    const isClosed = thoughtSection.classList.toggle("closed");
+    thoughtTitle.textContent = isClosed ? "▶ Thought Logs (DeepSeek R1)" : "▼ Thought Logs (DeepSeek R1)";
+  });
+  
+  // Abort button
+  const abortBtn = card.querySelector(".abort-btn");
+  abortBtn.addEventListener("click", async () => {
+    abortBtn.disabled = true;
+    abortBtn.textContent = "Aborting...";
+    await window.novaAPI.valkyrie.abort();
+  });
+  
+  els.chatMessages.appendChild(card);
+  els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+  
+  activeValkyrieCard = card;
+}
+
+function updateActiveValkyrieCard(type, data) {
+  if (!activeValkyrieCard) return;
+  
+  if (type === 'thought') {
+    const thoughtSection = activeValkyrieCard.querySelector(".valkyrie-thought-section");
+    const thoughtContent = activeValkyrieCard.querySelector(".thought-content");
+    
+    // Automatically open thought section if it's the first chunk
+    if (thoughtSection.classList.contains("closed") && valkyrieThoughtBuffer === "") {
+      thoughtSection.classList.remove("closed");
+      activeValkyrieCard.querySelector(".thought-title").textContent = "▼ Thought Logs (DeepSeek R1)";
+    }
+    
+    valkyrieThoughtBuffer += data;
+    thoughtContent.textContent = valkyrieThoughtBuffer;
+    thoughtContent.scrollTop = thoughtContent.scrollHeight;
+  }
+  
+  else if (type === 'plan') {
+    const planSection = activeValkyrieCard.querySelector(".valkyrie-plan-section");
+    const planList = activeValkyrieCard.querySelector(".plan-list");
+    planSection.classList.remove("hidden");
+    planList.innerHTML = "";
+    
+    for (const task of data) {
+      const li = document.createElement("li");
+      li.className = `plan-item ${task.status || 'pending'}`;
+      li.id = `plan-item-${task.id}`;
+      
+      let icon = "⬜";
+      if (task.status === 'completed') icon = "✅";
+      else if (task.status === 'in-progress') icon = "⚡";
+      else if (task.status === 'failed') icon = "❌";
+      
+      li.innerHTML = `<span class="status-icon">${icon}</span> <span>${task.description} <code style="font-size:0.7rem; opacity:0.7">(${task.assignedFile})</code></span>`;
+      planList.appendChild(li);
+    }
+  }
+  
+  else if (type === 'task') {
+    const item = activeValkyrieCard.querySelector(`#plan-item-${data.taskId}`);
+    if (item) {
+      item.className = `plan-item ${data.status}`;
+      const iconSpan = item.querySelector(".status-icon");
+      if (iconSpan) {
+        let icon = "⬜";
+        if (data.status === 'completed') icon = "✅";
+        else if (data.status === 'in-progress') icon = "⚡";
+        else if (data.status === 'failed') icon = "❌";
+        iconSpan.textContent = icon;
+      }
+    }
+  }
+  
+  else if (type === 'diff') {
+    const diffSection = activeValkyrieCard.querySelector(".valkyrie-diff-section");
+    const diffContent = activeValkyrieCard.querySelector(".diff-content");
+    diffSection.classList.remove("hidden");
+    
+    valkyrieDiffBuffer += data;
+    diffContent.textContent = valkyrieDiffBuffer;
+    diffContent.scrollTop = diffContent.scrollHeight;
+  }
+  
+  else if (type === 'review') {
+    // Show verification attempts / status updates
+    const statusBarText = activeValkyrieCard.querySelector(".status-text");
+    if (data.approved) {
+      statusBarText.textContent = `Llama 3.3 approved changes (Score: ${data.score}/100)`;
+    } else {
+      statusBarText.textContent = `⚠️ Attempt ${data.attempt} failed verification: ${data.feedback.slice(0, 60)}...`;
+      // Append a small warning below the item
+      const item = activeValkyrieCard.querySelector(`#plan-item-${data.taskId}`);
+      if (item) {
+        const feedbackDiv = document.createElement("div");
+        feedbackDiv.style.cssText = "font-size: 0.72rem; color: #ff6170; margin-left: 20px; font-style: italic;";
+        feedbackDiv.textContent = `Attempt ${data.attempt} failed: ${data.feedback}`;
+        item.appendChild(feedbackDiv);
+      }
+    }
+  }
+  
+  else if (type === 'status') {
+    const statusBarText = activeValkyrieCard.querySelector(".status-text");
+    statusBarText.textContent = data;
+  }
+  
+  else if (type === 'error') {
+    const statusBar = activeValkyrieCard.querySelector(".valkyrie-status-bar");
+    statusBar.innerHTML = `<span class="status-dot" style="background:var(--danger)"></span> <span style="color:var(--danger)">Error: ${data}</span>`;
+    activeValkyrieCard.querySelector(".abort-btn").classList.add("hidden");
+  }
+  
+  else if (type === 'completed') {
+    const statusBar = activeValkyrieCard.querySelector(".valkyrie-status-bar");
+    statusBar.innerHTML = `<span class="status-dot" style="background:var(--good)"></span> <span style="color:var(--good)">Execution Completed Successfully!</span>`;
+    activeValkyrieCard.querySelector(".abort-btn").classList.add("hidden");
+    
+    // Close the thought logs to save vertical space
+    activeValkyrieCard.querySelector(".valkyrie-thought-section").classList.add("closed");
+    activeValkyrieCard.querySelector(".thought-title").textContent = "▶ Thought Logs (DeepSeek R1)";
+    
+    // Trigger updates
+    refreshWorkspaceTree();
+    
+    // Reload active file in editor as a side-by-side interactive Diff Review
+    const activeTab = getActiveTab();
+    if (activeTab) {
+      window.novaAPI.readFile(activeTab.path).then(newContent => {
+        showDiffEditor(valkyrieSession.originalContent, newContent, activeTab.path);
+        
+        // Update standard active tab content in memory
+        activeTab.content = newContent;
+        activeTab.dirty = false;
+        renderTabs();
+      });
+    }
+  }
+  
+  els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+}
+
+// --- Diff Editor State & Management ---
+let valkyrieSession = {
+  activeFilePath: null,
+  originalContent: ""
+};
+
+function showDiffEditor(originalCode, modifiedCode, filePath) {
+  if (!state.diffEditor) {
+    state.diffEditor = monaco.editor.createDiffEditor(els.monacoDiffContainer, {
+      originalEditable: false,
+      readOnly: false,
+      renderSideBySide: true,
+      theme: els.themeSelect.value || "vs-dark",
+      ignoreTrimWhitespace: false,
+      automaticLayout: true
+    });
+  }
+
+  const language = getLanguageForPath(filePath);
+  const originalModel = monaco.editor.createModel(originalCode, language);
+  const modifiedModel = monaco.editor.createModel(modifiedCode, language);
+
+  state.diffEditor.setModel({
+    original: originalModel,
+    modified: modifiedModel
+  });
+
+  els.monacoEditorContainer.classList.add("hidden");
+  els.monacoDiffContainer.classList.remove("hidden");
+  els.diffControlBar.classList.remove("hidden");
+}
+
+function hideDiffEditor() {
+  els.monacoDiffContainer.classList.add("hidden");
+  els.monacoEditorContainer.classList.remove("hidden");
+  els.diffControlBar.classList.add("hidden");
+
+  // Load the new accepted content back into the main Monaco editor
+  const activeTab = getActiveTab();
+  if (activeTab) {
+    setEditorContent(activeTab.content, activeTab.path);
+  }
+
+  if (state.diffEditor) {
+    const models = state.diffEditor.getModel();
+    if (models) {
+      if (models.original) models.original.dispose();
+      if (models.modified) models.modified.dispose();
+    }
+  }
+}
+
+function getLanguageForPath(filePath) {
+  const ext = filePath.split(".").pop().toLowerCase();
+  return LANGUAGE_BY_EXT[ext] || "plaintext";
 }

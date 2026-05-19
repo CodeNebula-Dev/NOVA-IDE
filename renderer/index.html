@@ -40,8 +40,16 @@
 
         <section class="panel panel-center">
           <div id="tabsBar" class="tabs-bar"></div>
-          <div class="editor-shell">
+          <div class="editor-shell" style="position: relative; display: flex; flex-direction: column; width: 100%; height: 100%;">
+            <div id="diffControlBar" class="diff-control-bar hidden" style="display: flex; align-items: center; justify-content: space-between; background: #151a26; border: 1px solid var(--line); border-radius: 8px; padding: 6px 14px; margin: 8px; box-shadow: 0 4px 18px rgba(0,0,0,0.35); z-index: 10;">
+              <span class="diff-title" style="font-weight: 700; font-size: 0.84rem; color: #fff;">⚡ Proposed Valkyrie Changes</span>
+              <div class="diff-actions" style="display: flex; gap: 8px;">
+                <button id="acceptDiffBtn" class="accent-btn" style="padding: 4px 10px; font-size: 0.78rem;">Accept & Commit</button>
+                <button id="rejectDiffBtn" class="secondary-btn" style="padding: 4px 10px; font-size: 0.78rem; background: transparent; border-color: rgba(255,255,255,0.15);">Reject</button>
+              </div>
+            </div>
             <div id="monacoEditorContainer" style="flex: 1; height: 100%; width: 100%;"></div>
+            <div id="monacoDiffContainer" class="hidden" style="flex: 1; height: 100%; width: 100%;"></div>
           </div>
           <div class="status-bar">
             <span id="statusLanguage">plaintext</span>
@@ -86,6 +94,11 @@
             <label id="openRouterKeyWrap" class="hidden">
               OpenRouter API Key
               <input id="openRouterKeyInput" type="password" placeholder="sk-or-..." autocomplete="off" />
+            </label>
+
+            <label id="groqKeyWrap" class="hidden">
+              Groq API Key (Llama 3.3)
+              <input id="groqKeyInput" type="password" placeholder="gsk_..." autocomplete="off" />
             </label>
 
             <p id="modelHint" class="hint-text"></p>
