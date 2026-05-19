@@ -6,8 +6,10 @@ const pty = require("node-pty");
 const os = require("os");
 const crypto = require("crypto");
 const Database = require("better-sqlite3");
+const { ValkyrieEngine } = require("./main/agents/valkyrie");
 
 let mainWindow;
+let activeValkyrie = null;
 const ptyProcesses = new Map();
 
 let workspaceRoot = process.cwd();
@@ -315,6 +317,35 @@ ipcMain.handle("chat:delete-message", (event, messageId) => {
   const stmt = db.prepare("DELETE FROM messages WHERE id = ?");
   stmt.run(messageId);
   return true;
+});
+
+
+ipcMain.handle("valkyrie:execute", async (event, conversationId, prompt, activeFilePath, apiKeys) => {
+  if (activeValkyrie) {
+    activeValkyrie.abort();
+  }
+  activeValkyrie = new ValkyrieEngine(mainWindow, db, workspaceRoot);
+  try {
+    const results = await activeValkyrie.run(conversationId, prompt, activeFilePath, apiKeys);
+    return results;
+  } finally {
+    activeValkyrie = null;
+  }
+});
+
+ipcMain.handle("valkyrie:abort", async () => {
+  if (activeValkyrie) {
+    activeValkyrie.abort();
+    activeValkyrie = null;
+  }
+  return true;
+});
+
+ipcMain.handle("valkyrie:get-env-keys", () => {
+  return {
+    openrouter: process.env.OPENROUTER_API_KEY || "",
+    groq: process.env.GROQ_API_KEY || ""
+  };
 });
 
 
