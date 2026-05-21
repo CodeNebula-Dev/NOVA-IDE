@@ -20,8 +20,15 @@ At the very end of your response, output a raw JSON array matching this typescri
 ]
 Do not write markdown backticks or explanation texts outside the think tags except for the raw JSON payload.`;
 
+  let workspaceFilesText = "";
+  if (contextData.workspaceFiles && contextData.workspaceFiles.length > 0) {
+    workspaceFilesText = "\n\nWorkspace Files Content:\n" + contextData.workspaceFiles.map(f => {
+      return `File: ${f.relativePath}\n\`\`\`\n${f.content}\n\`\`\``;
+    }).join("\n\n");
+  }
+
   const userContent = `Workspace Tree:
-${contextData.treeText || "No file tree available"}
+${contextData.treeText || "No file tree available"}${workspaceFilesText}
 
 Current File: ${contextData.activeFilePath || "None"}
 File Content:
@@ -38,14 +45,23 @@ ${userPrompt}`;
     const systemPromptFallback = `You are the Lead Architect Agent inside NOVA IDE.
 Your objective is to inspect the codebase context and developer request, and construct a precise plan of tasks as a JSON array.
 
-Each task in the array MUST specify:
-1. "id": unique string, e.g. "task-1"
-2. "description": short explanation of modifications
-3. "assignedFile": relative file path that needs editing (e.g. "main.js")
+CRITICAL GUIDELINES FOR PLANNING:
+1. Divide complex developer requests into a sequential list of 3 to 8 atomic, high-granularity tasks.
+2. DO NOT create a single massive task to rewrite or implement everything at once. Smaller, step-by-step tasks allow the coding agent to succeed with perfect formatting, correct structure, and syntax correctness.
+3. Even if changes target a single file (e.g., "bachi_daemon.py"), split the implementation into separate logical steps. For example:
+   - Task 1: Define core configuration schemas, imports, and global constants.
+   - Task 2: Implement utility helper functions and structural classes.
+   - Task 3: Implement core system event handlers or event listener classes.
+   - Task 4: Set up the main program entrypoint and initialization loop.
+4. Each task in the array MUST specify:
+   - "id": unique string, e.g. "task-1", "task-2", etc.
+   - "description": clear, actionable explanation of modifications to make in this specific step.
+   - "assignedFile": relative file path that needs editing (e.g. "bachi_daemon.py").
 
 Return a raw JSON array matching this schema:
 [
-  { "id": "task-1", "description": "Add a hello world log", "assignedFile": "main.js" }
+  { "id": "task-1", "description": "Define configuration logic and imports", "assignedFile": "bachi_daemon.py" },
+  { "id": "task-2", "description": "Implement the core file organizer class", "assignedFile": "bachi_daemon.py" }
 ]
 
 CRITICAL: Return ONLY the raw JSON array. No other text, no markdown backticks, no explanations. Just the JSON array.`;
@@ -192,26 +208,32 @@ CRITICAL: Return ONLY the raw JSON array. No other text, no markdown backticks, 
     }
   );
 
+  let streamBuffer = "";
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    const chunk = decoder.decode(value, { stream: true });
-    const lines = chunk.split("\n").filter(line => line.trim().startsWith("data:"));
+    streamBuffer += decoder.decode(value, { stream: true });
     
-    for (const line of lines) {
-      const dataStr = line.slice(5).trim();
-      if (dataStr === "[DONE]") continue;
+    let lineIndex;
+    while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
+      const line = streamBuffer.slice(0, lineIndex).trim();
+      streamBuffer = streamBuffer.slice(lineIndex + 1);
+      
+      if (line.startsWith("data:")) {
+        const dataStr = line.slice(5).trim();
+        if (dataStr === "[DONE]") continue;
 
-      try {
-        const parsed = JSON.parse(dataStr);
-        const text = parsed?.choices?.[0]?.delta?.content || "";
-        if (text) {
-          fullContent += text;
-          streamParser.feed(text);
+        try {
+          const parsed = JSON.parse(dataStr);
+          const text = parsed?.choices?.[0]?.delta?.content || "";
+          if (text) {
+            fullContent += text;
+            streamParser.feed(text);
+          }
+        } catch (e) {
+          // Ignore JSON error
         }
-      } catch (e) {
-        // Ignore lines that aren't valid JSON chunk events
       }
     }
   }

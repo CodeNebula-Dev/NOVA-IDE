@@ -731,16 +731,23 @@ function bindEvents() {
 
   els.acceptDiffBtn?.addEventListener("click", async () => {
     try {
+      const workspaceRoot = state.workspaceRoot || await window.novaAPI.getWorkspaceRoot();
+
       for (const file of valkyrieSession.modifiedFiles) {
-        await window.novaAPI.writeFile(file.filePath, file.proposedContent);
+        let absPath = file.filePath;
+        if (workspaceRoot && !file.filePath.startsWith('/')) {
+          absPath = `${workspaceRoot}/${file.filePath}`;
+        }
+
+        await window.novaAPI.writeFile(absPath, file.proposedContent);
         
-        // Update active tab if it's currently open
-        const activeTab = state.tabs.find(t => t.path === file.filePath);
+        // Update active tab if it's currently open (support both absolute and relative matching)
+        const activeTab = state.tabs.find(t => t.path === absPath || t.path === file.filePath);
         if (activeTab) {
           activeTab.content = file.proposedContent;
           activeTab.dirty = false;
-          if (state.activePath === file.filePath) {
-            setEditorContent(file.proposedContent, file.filePath);
+          if (state.activePath === absPath || state.activePath === file.filePath) {
+            setEditorContent(file.proposedContent, absPath);
           }
         }
       }
@@ -1078,6 +1085,24 @@ function activateTab(path) {
   updateApplyButtonState();
 }
 
+function createMonacoUri(pathStr) {
+  if (pathStr.startsWith('file://')) {
+    return monaco.Uri.parse(pathStr);
+  }
+  const cleanPath = pathStr.replace(/\\/g, '/');
+  if (cleanPath.startsWith('/') || /^[a-zA-Z]:\//.test(cleanPath)) {
+    return monaco.Uri.file(cleanPath);
+  }
+  const workspaceRoot = state.workspaceRoot;
+  if (workspaceRoot) {
+    const abs = workspaceRoot.replace(/\\/g, '/');
+    const separator = abs.endsWith('/') ? '' : '/';
+    return monaco.Uri.file(`${abs}${separator}${cleanPath}`);
+  }
+  const pathNoLeadingSlash = cleanPath.startsWith('/') ? cleanPath.slice(1) : cleanPath;
+  return monaco.Uri.parse(`file:///${pathNoLeadingSlash}`);
+}
+
 function closeTab(path) {
   const index = state.tabs.findIndex((tab) => tab.path === path);
   if (index === -1) {
@@ -1087,7 +1112,7 @@ function closeTab(path) {
   state.tabs.splice(index, 1);
   
   // Dispose the Monaco model to keep memory safe
-  const fileUri = monaco.Uri.parse(`file:///${path}`);
+  const fileUri = createMonacoUri(path);
   const model = monaco.editor.getModel(fileUri);
   if (model) {
     model.dispose();
@@ -1160,7 +1185,7 @@ function setEditorContent(content, filePath) {
     return;
   }
 
-  const fileUri = monaco.Uri.parse(`file:///${filePath}`);
+  const fileUri = createMonacoUri(filePath);
   let model = monaco.editor.getModel(fileUri);
 
   if (!model) {
@@ -1565,7 +1590,7 @@ function formatMessageContent(content) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
     
-  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+  const codeBlockRegex = /```(\w*)\r?\n([\s\S]*?)```/g;
   escaped = escaped.replace(codeBlockRegex, (match, lang, code) => {
     const encoded = encodeURIComponent(code.trim());
     const displayLang = lang ? lang.toLowerCase() : "code";
@@ -2049,7 +2074,7 @@ async function callOpenRouter(messages) {
 }
 
 function extractCodeFromResponse(text) {
-  const fencedMatch = text.match(/```(?:[\w.+-]+)?\n([\s\S]*?)```/);
+  const fencedMatch = text.match(/```(?:[\w.+-]+)?\r?\n([\s\S]*?)\r?\n```/);
   if (fencedMatch?.[1]) {
     return fencedMatch[1].trimEnd();
   }
@@ -2180,6 +2205,74 @@ function applyPanelWidth(panelWidth) {
 let activeValkyrieCard = null;
 let valkyrieThoughtBuffer = "";
 let valkyrieDiffBuffer = "";
+
+function renderValkyrieDiff(buffer) {
+  const lines = buffer.split(/\r?\n/);
+  let html = "";
+  let inSearch = false;
+  let inReplace = false;
+
+  const escapeHtml = (str) => {
+    if (!str) return "&nbsp;";
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Check for SEARCH/REPLACE boundaries
+    if (trimmed.startsWith("<<<<<<< SEARCH")) {
+      inSearch = true;
+      inReplace = false;
+      html += `<div class="diff-marker-search">🔍 SEARCH (Existing Code)</div>`;
+      continue;
+    } else if (trimmed.startsWith("=======")) {
+      inSearch = false;
+      inReplace = true;
+      html += `<div class="diff-marker-divider">⚡ REPLACE (New Code)</div>`;
+      continue;
+    } else if (trimmed.startsWith(">>>>>>> REPLACE")) {
+      inSearch = false;
+      inReplace = false;
+      html += `<div class="diff-marker-replace">✅ END REPLACE</div>`;
+      continue;
+    }
+
+    // Check if we are inside a SEARCH block (code being replaced)
+    if (inSearch) {
+      html += `<span class="diff-line-search">${escapeHtml(line)}</span>`;
+      continue;
+    }
+
+    // Check if we are inside a REPLACE block (new code replacing the old)
+    if (inReplace) {
+      html += `<span class="diff-line-replace">${escapeHtml(line)}</span>`;
+      continue;
+    }
+
+    // Fallback: If not inside SEARCH/REPLACE blocks, it could be a standard Unified Diff or normal text
+    if (trimmed.startsWith("--- ") || trimmed.startsWith("+++ ")) {
+      html += `<span class="diff-header-line">${escapeHtml(line)}</span>`;
+    } else if (trimmed.startsWith("@@")) {
+      html += `<span class="diff-header-line">${escapeHtml(line)}</span>`;
+    } else if (line.startsWith("-") && !trimmed.startsWith("---")) {
+      html += `<span class="diff-line-search">${escapeHtml(line)}</span>`;
+    } else if (line.startsWith("+") && !trimmed.startsWith("+++")) {
+      html += `<span class="diff-line-replace">${escapeHtml(line)}</span>`;
+    } else {
+      // Normal code line
+      html += `<span class="diff-line-normal">${escapeHtml(line)}</span>`;
+    }
+  }
+
+  return html;
+}
 
 function createValkyrieCard(userPrompt) {
   valkyrieThoughtBuffer = "";
@@ -2424,7 +2517,7 @@ function updateActiveValkyrieCard(type, data) {
     
     const isFirstDiffChunk = valkyrieDiffBuffer === "";
     valkyrieDiffBuffer += data;
-    diffContent.textContent = valkyrieDiffBuffer;
+    diffContent.innerHTML = renderValkyrieDiff(valkyrieDiffBuffer);
     // Smart nested scroll inside the diff log container
     scrollElementToBottom(diffContent, isFirstDiffChunk);
     

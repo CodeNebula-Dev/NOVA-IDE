@@ -49,10 +49,72 @@ class ValkyrieEngine {
     // Load workspace tree in summary
     const treeText = await this.buildTreeTextSummary();
 
+    // Smart workspace-wide file reading
+    const workspaceFiles = [];
+    try {
+      const allFiles = await this.scanWorkspaceFiles();
+      const totalSize = allFiles.reduce((acc, f) => acc + f.size, 0);
+      const readLimitBytes = 150000; // 150KB limit for reading everything
+
+      const isMentioned = (relPath) => {
+        const promptLower = userPrompt.toLowerCase();
+        const filename = path.basename(relPath).toLowerCase();
+        const nameWithoutExt = path.parse(filename).name;
+
+        if (nameWithoutExt.length >= 3 && promptLower.includes(nameWithoutExt)) return true;
+        if (promptLower.includes(filename)) return true;
+
+        const promptTokens = promptLower.split(/[^a-z0-9]+/);
+        const fileTokens = nameWithoutExt.split(/[^a-z0-9]+/);
+        const significantFileTokens = fileTokens.filter(t => t.length >= 3);
+
+        if (significantFileTokens.length > 0) {
+          const matchedTokens = significantFileTokens.filter(ft => {
+            return promptTokens.some(pt => pt.includes(ft) || ft.includes(pt));
+          });
+          if (matchedTokens.length === significantFileTokens.length) return true;
+        }
+        return false;
+      };
+
+      const filesToRead = [];
+      if (totalSize < readLimitBytes) {
+        // Small workspace: read all text files!
+        filesToRead.push(...allFiles);
+      } else {
+        // Large workspace: read only active file, mentioned files, and key project configs
+        for (const file of allFiles) {
+          const isKeyFile = ['readme.md', 'package.json', 'requirements.txt'].includes(path.basename(file.relativePath).toLowerCase());
+          const isActive = activeFilePath && (file.relativePath === activeFilePath || path.resolve(this.workspaceRoot, file.relativePath) === path.resolve(this.workspaceRoot, activeFilePath));
+
+          if (isActive || isMentioned(file.relativePath) || (isKeyFile && file.size < 5000)) {
+            filesToRead.push(file);
+          }
+        }
+      }
+
+      // Load contents for selected files (avoid reading the active file twice)
+      for (const file of filesToRead) {
+        try {
+          const isTargetActive = activeFilePath && (file.relativePath === activeFilePath || path.resolve(this.workspaceRoot, file.relativePath) === path.resolve(this.workspaceRoot, activeFilePath));
+          const content = isTargetActive ? activeFileContent : await fs.readFile(file.absolutePath, 'utf8');
+          workspaceFiles.push({
+            relativePath: file.relativePath,
+            content
+          });
+        } catch (err) {
+          console.error(`Could not read workspace file ${file.relativePath}:`, err);
+        }
+      }
+    } catch (scanErr) {
+      console.error("Workspace scanning failed:", scanErr);
+    }
+
     const contextData = {
       activeFilePath,
       activeFileContent,
-      treeText
+      treeText,
+      workspaceFiles
     };
 
     // --- STEP 1: PLANNING (DeepSeek R1) ---
@@ -84,6 +146,7 @@ class ValkyrieEngine {
     for (let i = 0; i < plan.length; i++) {
       if (this.aborted) break;
       const task = plan[i];
+      task.contextData = contextData; // Share the workspace files and active file context
       task.status = 'in-progress';
       this.emit('valkyrie:task-update', { taskId: task.id, status: 'in-progress' });
 
@@ -137,6 +200,40 @@ class ValkyrieEngine {
         } catch (err) {
           this.emit('valkyrie:error', { message: `Coder failed at task "${task.description}": ${err.message}` });
           return null;
+        }
+
+        // In-memory verification of patch application
+        let patchFailed = false;
+        let patchErrorMsg = "";
+        let attemptPatchedContent = "";
+
+        try {
+          attemptPatchedContent = applyPatch(taskFileContent, proposedDiff);
+
+          const isSearchReplace = proposedDiff.includes("<<<<<<< SEARCH") && proposedDiff.includes(">>>>>>> REPLACE");
+          const diffHasContent = proposedDiff && proposedDiff.trim().length > 5;
+          const originalNotEmpty = taskFileContent && taskFileContent.trim().length > 0;
+
+          if (isSearchReplace && diffHasContent && originalNotEmpty && attemptPatchedContent === taskFileContent) {
+            patchFailed = true;
+            patchErrorMsg = "The search-and-replace block could not be matched against the target file. No changes were applied. Check formatting, line indents, or use Option B (Full-File Replacement).";
+          }
+        } catch (err) {
+          patchFailed = true;
+          patchErrorMsg = err.message;
+        }
+
+        if (patchFailed) {
+          this.emit('valkyrie:review-status', { 
+            taskId: task.id, 
+            attempt: attempts, 
+            approved: false, 
+            score: 0, 
+            feedback: `Patch Application Failed: ${patchErrorMsg}` 
+          });
+
+          priorFeedback.push(`Attempt ${attempts} Feedback (Score: 0/100):\n⚠️ Patch Application Failed: ${patchErrorMsg}`);
+          continue; // Instantly trigger self-healing retry!
         }
 
         // Run Quality Review using Groq Llama 3.3
@@ -212,7 +309,12 @@ class ValkyrieEngine {
       if (this.aborted) break;
 
       // Apply the patch safely in-memory
-      const patchedContent = applyPatch(taskFileContent, proposedDiff);
+      let patchedContent = taskFileContent;
+      try {
+        patchedContent = applyPatch(taskFileContent, proposedDiff);
+      } catch (err) {
+        console.warn("Could not apply final patch in-memory, falling back to original content:", err.message);
+      }
       virtualFilesystem.set(task.assignedFile, patchedContent);
 
       // Create a snapshot checkpoint of the original disk state
@@ -271,6 +373,56 @@ class ValkyrieEngine {
     stmt.run(checkpointId, conversationId, relativePath, sha, backupFilePath);
 
     return checkpointId;
+  }
+
+  async scanWorkspaceFiles() {
+    const files = [];
+    const maxDepth = 4;
+    
+    const scan = async (dir, currentDepth = 0) => {
+      if (currentDepth > maxDepth) return;
+      let entries;
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true });
+      } catch (err) {
+        return;
+      }
+      
+      for (const entry of entries) {
+        const name = entry.name;
+        if (name === '.git' || name === 'node_modules' || name === '.nova' || name === '.venv' || name === '__pycache__' || name === '.DS_Store') {
+          continue;
+        }
+        
+        const fullPath = path.join(dir, name);
+        const relativePath = path.relative(this.workspaceRoot, fullPath);
+        
+        if (entry.isDirectory()) {
+          await scan(fullPath, currentDepth + 1);
+        } else if (entry.isFile()) {
+          const ext = path.extname(name).toLowerCase();
+          const isText = ['.py', '.js', '.ts', '.jsx', '.tsx', '.json', '.md', '.txt', '.html', '.css', '.yaml', '.yml', '.ini', '.conf', '.cfg', '.sh'].includes(ext);
+          
+          if (isText) {
+            try {
+              const stats = await fs.stat(fullPath);
+              files.push({
+                relativePath,
+                absolutePath: fullPath,
+                size: stats.size
+              });
+            } catch (e) {}
+          }
+        }
+      }
+    };
+    
+    try {
+      await scan(this.workspaceRoot);
+    } catch (e) {
+      console.error("Error in scanWorkspaceFiles:", e);
+    }
+    return files;
   }
 
   async buildTreeTextSummary() {

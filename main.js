@@ -105,8 +105,14 @@ function normalizeRelativePath(input = "") {
 }
 
 function resolveInWorkspace(relativePath = "") {
-  const safeRelativePath = normalizeRelativePath(relativePath);
-  const resolvedPath = path.resolve(workspaceRoot, safeRelativePath);
+  let resolvedPath;
+  if (path.isAbsolute(relativePath)) {
+    resolvedPath = path.resolve(relativePath);
+  } else {
+    const safeRelativePath = normalizeRelativePath(relativePath);
+    resolvedPath = path.resolve(workspaceRoot, safeRelativePath);
+  }
+  
   const normalizedRoot = path.resolve(workspaceRoot);
   const rootWithSep = normalizedRoot.endsWith(path.sep)
     ? normalizedRoot
@@ -456,11 +462,11 @@ ipcMain.handle("agent:chat", async (event, { agent, prompt, filePath, fileConten
 
   // Extract code block if present
   const codeMatch = rawText.match(/<nova-code>([\s\S]*?)<\/nova-code>/) ||
-                    rawText.match(/```[\w]*\n([\s\S]*?)```/);
+                    rawText.match(/```[\w]*\r?\n([\s\S]*?)\r?\n```/);
   const code = codeMatch ? codeMatch[1].trim() : null;
   const text = rawText
     .replace(/<nova-code>[\s\S]*?<\/nova-code>/g, "")
-    .replace(/```[\w]*\n[\s\S]*?```/g, "")
+    .replace(/```[\w]*\r?\n[\s\S]*?\r?\n```/g, "")
     .trim();
 
   return { text: text || (code ? "Here is the updated code:" : ""), code, raw: rawText };
