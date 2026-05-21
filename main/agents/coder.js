@@ -5,29 +5,36 @@
 
 async function runCoder(task, fileContent, priorFeedback, apiKey, onDiffChunk) {
   const systemPrompt = `You are the Lead Software Engineer Agent inside NOVA IDE. Your task is to execute the active architecture plan task and write file modifications.
-You MUST output surgical or full-file code modifications using ONE of these three formats:
 
-Option A: Search-and-Replace Blocks (Highly recommended for surgical edits). Use this format to specify blocks of code you want to replace:
+You MUST output file modifications using ONE of these three formats:
+
+Option A: Search-and-Replace Blocks (RECOMMENDED for most edits). Specify ONLY the exact code blocks to change:
 <<<<<<< SEARCH
-[exact existing lines of code to modify]
+[exact existing lines to replace - copy them verbatim]
 =======
-[new replacement code lines]
+[replacement lines]
 >>>>>>> REPLACE
 
-Option B: Full-File Replacement (Use this if the target file is corrupted, severely truncated, or has pre-existing syntax errors that need fixing). Output the ENTIRE syntax-clean file inside a standard markdown code block:
+Option B: Full-File Replacement (USE THIS when: the file is new, short, or needs major restructuring, or when Option A repeatedly fails).
+Output the ENTIRE file inside a single markdown code block:
 \`\`\`[language]
-[entire file content]
+[complete file contents]
 \`\`\`
 
-Option C: Unified git-style diff format:
+Option C: Unified diff format (only if Option A and B won't work):
 --- [relativePath]
 +++ [relativePath]
 @@ -[startLine],[lineCount] +[startLine],[lineCount] @@
 - [old code]
 + [new code]
 
-Ensure your edits are syntax-clean, compile-ready, and preserve existing style and comments.
-Choose the format that is safest and least error-prone for the target task. If the existing file has syntax errors, Option B (Full-File) is highly recommended.`;
+CRITICAL RULES — violating these will cause the task to fail:
+1. NEVER embed <<<<<<< SEARCH, =======, or >>>>>>> REPLACE markers inside actual code — these are ONLY output format markers.
+2. NEVER emit incomplete code or half-written functions. Always complete every code block.
+3. If unsure whether your search block will match exactly, use Option B (full file) instead.
+4. Every import statement that the new code needs MUST be present in the output.
+5. Choose Option B (full file) if the file is less than 300 lines OR if prior feedback mentions malformed diffs.
+6. Ensure your output is valid, compile-ready syntax for the target language.`;
 
   let userContent = `Active Task: ${task.description}
 Target File: ${task.assignedFile}
@@ -38,9 +45,20 @@ ${fileContent || ""}
 \`\`\``;
 
   if (priorFeedback && priorFeedback.length > 0) {
-    userContent += `\n\nPrior Review Feedback (FAILED VERIFICATION):
-${priorFeedback.join("\n")}
-Please rewrite the changes to fully resolve all these issues.`;
+    const feedbackText = priorFeedback.join("\n");
+    const hasMalformedDiff = feedbackText.toLowerCase().includes("malform") ||
+                             feedbackText.toLowerCase().includes("syntax error") ||
+                             feedbackText.toLowerCase().includes("no proposed diff") ||
+                             feedbackText.toLowerCase().includes("stray diff marker") ||
+                             feedbackText.toLowerCase().includes("incomplete");
+    
+    userContent += `\n\nPrior Review Feedback (FAILED VERIFICATION — attempt ${priorFeedback.length} of 3):
+${feedbackText}
+
+MANDATORY RETRY INSTRUCTIONS:
+- Your previous output was rejected. You MUST produce working, syntax-clean code this time.
+- ${hasMalformedDiff ? "⚠️ Your previous diff was MALFORMED. You MUST use Option B (full file replacement) this retry — output the COMPLETE file content inside a markdown code block." : "Carefully address ALL feedback points above."}
+- NEVER leave functions incomplete. NEVER embed <<<<<<< SEARCH markers in actual code.`;
   }
 
   if (!apiKey || apiKey.trim() === "") {
