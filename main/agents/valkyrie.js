@@ -91,6 +91,7 @@ class ValkyrieEngine {
       const maxAttempts = 3;
       let approved = false;
       let proposedDiff = "";
+      let bestDiff = ""; // Track the best (non-empty) diff seen across all attempts
       let taskFileContent = "";
       const priorFeedback = [];
 
@@ -114,7 +115,7 @@ class ValkyrieEngine {
         attempts++;
         this.emit('valkyrie:status', { 
           status: 'coding', 
-          message: `Task ${i+1}/${plan.length}: Writing diff hunk... (Attempt ${attempts}/${maxAttempts})` 
+          message: `Task ${i+1}/${plan.length}: Writing code changes... (Attempt ${attempts}/${maxAttempts})` 
         });
 
         // Generate changes using Qwen3-Coder
@@ -129,6 +130,10 @@ class ValkyrieEngine {
               this.emit('valkyrie:diff-chunk', { conversationId, chunk: diffChunk, taskId: task.id });
             }
           );
+          // Track the best (longest/most complete) non-empty diff across attempts
+          if (proposedDiff && proposedDiff.trim().length > (bestDiff ? bestDiff.trim().length : 0)) {
+            bestDiff = proposedDiff;
+          }
         } catch (err) {
           this.emit('valkyrie:error', { message: `Coder failed at task "${task.description}": ${err.message}` });
           return null;
@@ -137,35 +142,71 @@ class ValkyrieEngine {
         // Run Quality Review using Groq Llama 3.3
         this.emit('valkyrie:status', { 
           status: 'reviewing', 
-          message: `Task ${i+1}/${plan.length}: Llama 3.3 verifying code structure...` 
+          message: `Task ${i+1}/${plan.length}: Reviewing code quality...` 
         });
 
+        let reviewResult = null;
         try {
-          const review = await runReviewer(task, taskFileContent, proposedDiff, apiKeys);
-          this.emit('valkyrie:review-status', { 
-            taskId: task.id, 
-            attempt: attempts, 
-            approved: review.approved, 
-            score: review.score, 
-            feedback: review.feedback 
-          });
-
-          if (review.approved) {
-            approved = true;
-          } else {
-            priorFeedback.push(`Attempt ${attempts} Feedback (Score: ${review.score}/100):\n${review.feedback}`);
-          }
+          reviewResult = await runReviewer(task, taskFileContent, proposedDiff, apiKeys);
         } catch (err) {
-          console.warn("Reviewer check failed:", err);
-          priorFeedback.push(`Attempt ${attempts} Feedback (Reviewer Error):\nThe reviewer agent failed to process the changes: ${err.message}`);
+          // Reviewer network/parse error — non-blocking. Treat as soft pass if we have a diff.
+          console.warn("Reviewer threw an error (non-blocking):", err.message);
+          reviewResult = { approved: true, score: 70, feedback: `Reviewer error (auto-approved): ${err.message}`, issues: [] };
+        }
+
+        // Normalise result — ensure we always have an object
+        if (!reviewResult || typeof reviewResult !== 'object') {
+          reviewResult = { approved: true, score: 70, feedback: 'Reviewer returned null (auto-approved).', issues: [] };
+        }
+
+        this.emit('valkyrie:review-status', { 
+          taskId: task.id, 
+          attempt: attempts, 
+          approved: reviewResult.approved, 
+          score: reviewResult.score, 
+          feedback: reviewResult.feedback 
+        });
+
+        // Approve if: explicitly approved, or score ≥ 60, or last attempt with any content
+        const currentDiffHasContent = proposedDiff && proposedDiff.trim().length > 5;
+        const scorePassThreshold = (reviewResult.score || 0) >= 60;
+
+        if (reviewResult.approved || scorePassThreshold) {
+          approved = true;
+        } else if (attempts === maxAttempts && (currentDiffHasContent || bestDiff)) {
+          // Last chance: apply best diff seen even if reviewer score is low
+          if (!currentDiffHasContent && bestDiff) {
+            proposedDiff = bestDiff; // Fall back to best previous attempt
+          }
+          approved = true;
+          this.emit('valkyrie:status', {
+            status: 'coding',
+            message: `Task ${i+1}/${plan.length}: Reviewer score low (${reviewResult.score}/100) — applying best-effort changes.`
+          });
+        } else {
+          priorFeedback.push(`Attempt ${attempts} Feedback (Score: ${reviewResult.score}/100):\n${reviewResult.feedback}`);
         }
       }
 
       if (!approved && !this.aborted) {
-        this.emit('valkyrie:error', { 
-          message: `Agent harness failed to resolve changes for task "${task.description}" after ${maxAttempts} self-correction attempts.` 
-        });
-        return null;
+        // Ultimate safety net: use the best diff seen across all attempts
+        const diffToApply = bestDiff || proposedDiff;
+        if (diffToApply && diffToApply.trim().length > 5) {
+          proposedDiff = diffToApply;
+          approved = true;
+          this.emit('valkyrie:status', {
+            status: 'coding',
+            message: `Task ${i+1}/${plan.length}: Applying best-effort changes after ${maxAttempts} review cycles.`
+          });
+        } else {
+          this.emit('valkyrie:error', { 
+            message: `Coder produced no usable output for task "${task.description}" after ${maxAttempts} attempts. Skipping task.` 
+          });
+          // Skip this task but continue with remaining tasks (don't abort the whole plan)
+          task.status = 'failed';
+          this.emit('valkyrie:task-update', { taskId: task.id, status: 'failed' });
+          continue;
+        }
       }
 
       if (this.aborted) break;

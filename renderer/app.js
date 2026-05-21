@@ -196,6 +196,7 @@ async function init() {
   bindEvents();
   syncAgentModeUI();
   syncProviderUI();
+  initResizableHandles();
 
   // Load API Keys from Environment Variables (fallback to LocalStorage)
   try {
@@ -220,15 +221,17 @@ async function init() {
   // 3. Load conversations from database
   await loadConversations();
 
-  // 3. Fetch File tree
+  // 4. Fetch workspace root — if empty, show welcome screen
   state.workspaceRoot = await window.novaAPI.getWorkspaceRoot();
-  await refreshWorkspaceTree();
 
-  // 4. Auto-open first workspace file
-  const firstFile = findFirstFilePath(state.tree);
-  if (firstFile) {
-    await openFile(firstFile);
+  if (!state.workspaceRoot) {
+    // No workspace open — show welcome screen
+    showWelcomeScreen();
+    await refreshWorkspaceTree();
   } else {
+    hideWelcomeScreen();
+    await refreshWorkspaceTree();
+    // Do NOT auto-open any file — user opens files explicitly
     clearEditor();
   }
 
@@ -398,6 +401,149 @@ function handleTerminalResize() {
   if (activeTerminal && state.terminalVisible) {
     activeTerminal.fit.fit();
     window.novaAPI.terminalResize(activeTerminal.termId, activeTerminal.term.cols, activeTerminal.term.rows);
+  }
+}
+
+/**
+ * Resizable panel handles — drag to resize sidebar, AI panel, and terminal
+ */
+function initResizableHandles() {
+  // ── Sidebar resize (sidebar ↔ editor) ────────────────────────────────────
+  const sidebarHandle = document.getElementById('resizeSidebar');
+  const sidebar = document.getElementById('sidebar');
+
+  if (sidebarHandle && sidebar) {
+    let dragging = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    sidebarHandle.addEventListener('mousedown', (e) => {
+      dragging = true;
+      startX = e.clientX;
+      startWidth = sidebar.getBoundingClientRect().width;
+      sidebarHandle.classList.add('dragging');
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const delta = e.clientX - startX;
+      const newWidth = Math.min(600, Math.max(140, startWidth + delta));
+      sidebar.style.width = newWidth + 'px';
+      sidebar.style.minWidth = newWidth + 'px';
+      document.documentElement.style.setProperty('--sidebar-width', newWidth + 'px');
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (dragging) {
+        dragging = false;
+        sidebarHandle.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        // Trigger Monaco layout update
+        if (state.editor) state.editor.layout();
+      }
+    });
+  }
+
+  // ── AI Panel resize (editor ↔ AI panel) ──────────────────────────────────
+  const aiHandle = document.getElementById('resizeAiPanel');
+  const aiPanel = document.getElementById('aiPanel');
+
+  if (aiHandle && aiPanel) {
+    let dragging = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    aiHandle.addEventListener('mousedown', (e) => {
+      dragging = true;
+      startX = e.clientX;
+      startWidth = aiPanel.getBoundingClientRect().width;
+      aiHandle.classList.add('dragging');
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      // Dragging left = bigger AI panel
+      const delta = startX - e.clientX;
+      const newWidth = Math.min(700, Math.max(260, startWidth + delta));
+      aiPanel.style.width = newWidth + 'px';
+      aiPanel.style.minWidth = newWidth + 'px';
+      document.documentElement.style.setProperty('--ai-panel-width', newWidth + 'px');
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (dragging) {
+        dragging = false;
+        aiHandle.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        if (state.editor) state.editor.layout();
+      }
+    });
+  }
+
+  // ── Terminal vertical resize ──────────────────────────────────────────────
+  const termHandle = document.getElementById('resizeTerminal');
+  const termPanel = document.getElementById('terminalPanel');
+
+  if (termHandle && termPanel) {
+    let dragging = false;
+    let startY = 0;
+    let startHeight = 0;
+
+    termHandle.addEventListener('mousedown', (e) => {
+      if (termPanel.classList.contains('hidden')) return;
+      dragging = true;
+      startY = e.clientY;
+      startHeight = termPanel.getBoundingClientRect().height;
+      termHandle.classList.add('dragging');
+      document.body.style.cursor = 'ns-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const delta = startY - e.clientY;
+      const newHeight = Math.min(600, Math.max(80, startHeight + delta));
+      termPanel.style.height = newHeight + 'px';
+      document.documentElement.style.setProperty('--terminal-height', newHeight + 'px');
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (dragging) {
+        dragging = false;
+        termHandle.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        handleTerminalResize();
+        if (state.editor) state.editor.layout();
+      }
+    });
+  }
+
+  // ── Welcome screen buttons ────────────────────────────────────────────────
+  const welcomeOpenFolderBtn = document.getElementById('welcomeOpenFolderBtn');
+  if (welcomeOpenFolderBtn) {
+    welcomeOpenFolderBtn.addEventListener('click', handleSelectWorkspace);
+  }
+
+  const welcomeOpenFileBtn = document.getElementById('welcomeOpenFileBtn');
+  if (welcomeOpenFileBtn) {
+    welcomeOpenFileBtn.addEventListener('click', async () => {
+      // If no workspace, prompt to open folder first
+      if (!state.workspaceRoot) {
+        addChatMessage('system', '⚠️ Please open a folder first using "Open Folder".');
+        return;
+      }
+      handleCreateFile();
+    });
   }
 }
 
@@ -705,6 +851,8 @@ function searchWorkspaceTree(query) {
 async function handleSelectWorkspace() {
   try {
     state.workspaceRoot = await window.novaAPI.selectWorkspaceRoot();
+    if (!state.workspaceRoot) return; // User cancelled the dialog
+
     state.tabs = [];
     state.activePath = null;
     state.selectedPath = "";
@@ -716,16 +864,33 @@ async function handleSelectWorkspace() {
       window.removeEventListener("resize", handleTerminalResize);
     }
 
+    hideWelcomeScreen();
     clearEditor();
     await refreshWorkspaceTree();
-    const firstFile = findFirstFilePath(state.tree);
-    if (firstFile) {
-      await openFile(firstFile);
-    }
-    addChatMessage("system", "Workspace switched.");
+    addChatMessage("system", `Workspace opened: ${state.workspaceRoot}`);
   } catch (error) {
     addChatMessage("system", `Workspace switch failed: ${error.message}`);
   }
+}
+
+/**
+ * Show the VS Code-style welcome screen when no folder is open
+ */
+function showWelcomeScreen() {
+  const ws = document.getElementById('welcomeScreen');
+  if (ws) ws.classList.remove('hidden');
+  if (els.tabsBar) {
+    const empty = document.createElement('div');
+    empty.className = 'tab-empty';
+    empty.textContent = 'No open tabs';
+    els.tabsBar.innerHTML = '';
+    els.tabsBar.appendChild(empty);
+  }
+}
+
+function hideWelcomeScreen() {
+  const ws = document.getElementById('welcomeScreen');
+  if (ws) ws.classList.add('hidden');
 }
 
 async function refreshWorkspaceTree() {
@@ -733,7 +898,14 @@ async function refreshWorkspaceTree() {
     state.tree = await window.novaAPI.readTree();
     state.workspaceRoot = await window.novaAPI.getWorkspaceRoot();
     state.expandedFolders.add("");
-    els.workspaceLabel.textContent = state.workspaceRoot;
+    // Show folder name only (not full path) in the title bar label
+    if (state.workspaceRoot) {
+      const folderName = state.workspaceRoot.split('/').pop() || state.workspaceRoot;
+      els.workspaceLabel.textContent = folderName;
+      els.workspaceLabel.title = state.workspaceRoot;
+    } else {
+      els.workspaceLabel.textContent = '';
+    }
     renderFileTree();
     renderTabs();
     updateContextLabel();
@@ -1088,14 +1260,20 @@ function getSuggestedBasePath() {
 }
 
 async function handleCreateFile() {
-  const basePath = getSuggestedBasePath();
-  const suggestion = basePath ? `${basePath}/` : "";
-  const rawPath = window.prompt("New file path (e.g. src/index.ts):", suggestion);
-  if (!rawPath) {
+  // Guard: workspace must be open
+  if (!state.workspaceRoot) {
+    addChatMessage("system", "⚠️ Please open a folder first before creating files.");
     return;
   }
 
-  const filePath = normalizePath(rawPath);
+  const basePath = getSuggestedBasePath();
+  const suggestion = basePath ? `${basePath}/` : "";
+  const rawPath = window.prompt("New file path (e.g. src/index.ts):", suggestion);
+  if (!rawPath || !rawPath.trim()) {
+    return;
+  }
+
+  const filePath = normalizePath(rawPath.trim());
   if (!filePath) {
     return;
   }
@@ -1104,20 +1282,27 @@ async function handleCreateFile() {
     await window.novaAPI.createFile(filePath);
     await refreshWorkspaceTree();
     await openFile(filePath);
+    addChatMessage("system", `✅ Created file: ${filePath}`);
   } catch (error) {
-    addChatMessage("system", `Could not create file: ${error.message}`);
+    addChatMessage("system", `❌ Could not create file: ${error.message}`);
   }
 }
 
 async function handleCreateFolder() {
-  const basePath = getSuggestedBasePath();
-  const suggestion = basePath ? `${basePath}/` : "";
-  const rawPath = window.prompt("New folder path (e.g. src/components):", suggestion);
-  if (!rawPath) {
+  // Guard: workspace must be open
+  if (!state.workspaceRoot) {
+    addChatMessage("system", "⚠️ Please open a folder first before creating folders.");
     return;
   }
 
-  const folderPath = normalizePath(rawPath);
+  const basePath = getSuggestedBasePath();
+  const suggestion = basePath ? `${basePath}/` : "";
+  const rawPath = window.prompt("New folder path (e.g. src/components):", suggestion);
+  if (!rawPath || !rawPath.trim()) {
+    return;
+  }
+
+  const folderPath = normalizePath(rawPath.trim());
   if (!folderPath) {
     return;
   }
@@ -1126,8 +1311,9 @@ async function handleCreateFolder() {
     await window.novaAPI.createFolder(folderPath);
     state.expandedFolders.add(folderPath);
     await refreshWorkspaceTree();
+    addChatMessage("system", `✅ Created folder: ${folderPath}`);
   } catch (error) {
-    addChatMessage("system", `Could not create folder: ${error.message}`);
+    addChatMessage("system", `❌ Could not create folder: ${error.message}`);
   }
 }
 

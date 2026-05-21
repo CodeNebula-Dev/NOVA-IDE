@@ -307,72 +307,106 @@ class DiffManager {
    * Accept all changes and apply to editor
    */
   async acceptAllChanges() {
-    if (!this.state.currentFile) {
-      console.error('❌ No file selected');
+    const files = this.state.files;
+    if (!files || Object.keys(files).length === 0) {
+      console.error('❌ No files to accept');
       return;
     }
 
-    const filePath = this.state.currentFile;
-    const { proposed } = this.state.files[filePath];
+    console.log('✅ Accepting all changes for', Object.keys(files).length, 'files');
 
-    console.log('✅ Accepting all changes for:', filePath);
-
-    try {
-      // Apply changes to file
-      await this.applyChangesToFile(filePath, proposed);
-
-      // Show success message
-      addChatMessage('system', `✅ Changes applied to ${filePath.split('/').pop()}`);
-
-      // Close diff view
-      this.hide();
-
-    } catch (error) {
-      console.error('❌ Failed to apply changes:', error);
-      addChatMessage('system', `❌ Error applying changes: ${error.message}`);
+    const failed = [];
+    for (const [filePath, fileData] of Object.entries(files)) {
+      try {
+        await this.applyChangesToFile(filePath, fileData.proposed);
+      } catch (error) {
+        console.error(`❌ Failed to apply changes to ${filePath}:`, error);
+        failed.push(filePath);
+      }
     }
+
+    if (failed.length > 0) {
+      addChatMessage('system', `⚠️ Some files could not be saved: ${failed.join(', ')}`);
+    } else {
+      const count = Object.keys(files).length;
+      addChatMessage('system', `✅ Applied changes to ${count} file${count > 1 ? 's' : ''}`);
+    }
+
+    this.hide();
   }
 
   /**
    * Apply proposed changes to a file
    * Updates Monaco editor and writes to disk
    * 
-   * @param {string} filePath - Path to file
+   * @param {string} filePath - Relative or absolute path to file
    * @param {string} content - New content to apply
    */
   async applyChangesToFile(filePath, content) {
-    // Find tab for this file
-    const tab = state.tabs?.find(t => t.path === filePath);
-    if (!tab) {
-      console.error('❌ Tab not found for:', filePath);
-      return;
+    // Resolve to absolute path — Valkyrie sends relative paths
+    const workspaceRoot = (typeof state !== 'undefined' && state.workspaceRoot) ||
+                          await window.novaAPI.getWorkspaceRoot();
+    
+    let absPath = filePath;
+    if (workspaceRoot && !filePath.startsWith('/')) {
+      absPath = `${workspaceRoot}/${filePath}`;
     }
 
-    console.log('💾 Applying changes to', filePath);
+    console.log('💾 Applying changes to', absPath, '(relative:', filePath, ')');
 
-    // Mark file as dirty (has unsaved changes)
-    tab.isDirty = true;
+    // Find or create a tab for this file
+    let tab = state.tabs?.find(t => t.path === absPath || t.path === filePath);
+
+    if (!tab) {
+      // File not currently open — open it first so Monaco can display the result
+      console.log('📂 File not in tabs, opening:', absPath);
+      try {
+        await openFile(absPath);
+        tab = state.tabs?.find(t => t.path === absPath);
+      } catch (e) {
+        console.warn('⚠️  Could not open file before applying changes:', e.message);
+      }
+    }
 
     // Update Monaco editor if this is the active file
-    if (state.activePath === filePath && state.editor) {
+    if (state.activePath === absPath && state.editor) {
       const model = state.editor.getModel();
-      model.setValue(content);
-      console.log('✅ Updated active editor');
+      if (model) {
+        model.setValue(content);
+        console.log('✅ Updated active editor');
+      }
+    } else if (tab && state.editor) {
+      // Update the tab's cached content and switch to it
+      tab.content = content;
+      // Switch to this file so the user sees the result
+      try {
+        await openFile(absPath);
+        const model = state.editor?.getModel();
+        if (model) model.setValue(content);
+      } catch (e) {
+        console.warn('⚠️  Could not switch to file:', e.message);
+      }
     }
 
-    // Write to filesystem via IPC
+    // Mark tab dirty (unsaved indicator)
+    if (tab) {
+      tab.isDirty = true;
+      if (typeof renderTabs === 'function') renderTabs();
+    }
+
+    // Write to filesystem via IPC — use absolute path
     try {
-      await window.novaAPI.writeFile(filePath, content);
-      console.log('✅ Written to disk:', filePath);
+      await window.novaAPI.writeFile(absPath, content);
+      console.log('✅ Written to disk:', absPath);
     } catch (error) {
-      console.warn('⚠️  Could not write to disk (may write on editor save):', error);
-    }
-
-    // Re-render tabs to show dirty indicator
-    if (typeof renderTabs === 'function') {
-      renderTabs();
-    } else if (window.renderTabs) {
-      window.renderTabs();
+      // Try relative path as fallback
+      try {
+        await window.novaAPI.writeFile(filePath, content);
+        console.log('✅ Written to disk (relative):', filePath);
+      } catch (err2) {
+        console.error('❌ Could not write to disk:', err2);
+        throw new Error(`Failed to write file: ${err2.message}`);
+      }
     }
   }
 

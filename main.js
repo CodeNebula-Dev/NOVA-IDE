@@ -12,13 +12,14 @@ let mainWindow;
 let activeValkyrie = null;
 const ptyProcesses = new Map();
 
-let workspaceRoot = process.cwd();
+let workspaceRoot = ""; // Empty by default — no auto-open on startup
 let db;
 
 const IGNORED_NAMES = new Set([".git", "node_modules", ".DS_Store"]);
 
-function initializeDatabase() {
-  const novaDir = path.join(workspaceRoot, ".nova");
+function initializeDatabase(root) {
+  if (!root) return; // Don't init DB without a workspace
+  const novaDir = path.join(root, ".nova");
   if (!fsSync.existsSync(novaDir)) {
     fsSync.mkdirSync(novaDir, { recursive: true });
   }
@@ -83,7 +84,11 @@ function createMainWindow() {
   mainWindow.loadFile(path.join(__dirname, "renderer/index.html"));
 
   mainWindow.webContents.on("console-message", (event, level, message, line, sourceId) => {
-    console.log(`[Renderer] ${message} (at ${sourceId}:${line})`);
+    try {
+      console.log(`[Renderer] ${message} (at ${sourceId}:${line})`);
+    } catch (e) {
+      // Ignore EPIPE and other write errors — happens when stdout pipe is closed
+    }
   });
 }
 
@@ -163,10 +168,18 @@ ipcMain.handle("workspace:select-root", async () => {
   }
 
   workspaceRoot = result.filePaths[0];
+  // Lazily init DB for the newly selected workspace
+  if (!db) {
+    initializeDatabase(workspaceRoot);
+  }
   return workspaceRoot;
 });
 
 ipcMain.handle("fs:read-tree", async () => {
+  // Return an empty root when no workspace is set
+  if (!workspaceRoot) {
+    return { type: "folder", name: "", path: "", children: [] };
+  }
   return buildTreeNode(workspaceRoot, "");
 });
 
@@ -261,6 +274,7 @@ ipcMain.handle("terminal:resize", (event, id, cols, rows) => {
 
 // Chat Database IPC Handlers
 ipcMain.handle("chat:create-conversation", (event, title) => {
+  if (!db) return null;
   const id = crypto.randomUUID();
   const stmt = db.prepare("INSERT INTO conversations (id, title) VALUES (?, ?)");
   stmt.run(id, title);
@@ -268,28 +282,33 @@ ipcMain.handle("chat:create-conversation", (event, title) => {
 });
 
 ipcMain.handle("chat:get-conversations", () => {
+  if (!db) return [];
   const stmt = db.prepare("SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC");
   return stmt.all();
 });
 
 ipcMain.handle("chat:get-conversation", (event, conversationId) => {
+  if (!db) return null;
   const stmt = db.prepare("SELECT * FROM conversations WHERE id = ?");
   return stmt.get(conversationId);
 });
 
 ipcMain.handle("chat:update-conversation-title", (event, conversationId, title) => {
+  if (!db) return false;
   const stmt = db.prepare("UPDATE conversations SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
   stmt.run(title, conversationId);
   return true;
 });
 
 ipcMain.handle("chat:delete-conversation", (event, conversationId) => {
+  if (!db) return false;
   const stmt = db.prepare("DELETE FROM conversations WHERE id = ?");
   stmt.run(conversationId);
   return true;
 });
 
 ipcMain.handle("chat:add-message", (event, conversationId, role, content, modelName) => {
+  if (!db) return null;
   const id = crypto.randomUUID();
   const stmt = db.prepare(`
     INSERT INTO messages (id, conversation_id, role, content, model_name)
@@ -304,6 +323,7 @@ ipcMain.handle("chat:add-message", (event, conversationId, role, content, modelN
 });
 
 ipcMain.handle("chat:get-messages", (event, conversationId) => {
+  if (!db) return [];
   const stmt = db.prepare(`
     SELECT id, role, content, model_name, prompt_tokens, completion_tokens, created_at
     FROM messages
@@ -314,6 +334,7 @@ ipcMain.handle("chat:get-messages", (event, conversationId) => {
 });
 
 ipcMain.handle("chat:delete-message", (event, messageId) => {
+  if (!db) return false;
   const stmt = db.prepare("DELETE FROM messages WHERE id = ?");
   stmt.run(messageId);
   return true;
@@ -484,7 +505,7 @@ ipcMain.handle("agent:inline-edit", async (event, { instruction, selectedCode, f
 });
 
 app.whenReady().then(() => {
-  initializeDatabase();
+  // DB is NOT initialized here — it's deferred to when a workspace is selected
   createMainWindow();
 
   app.on("activate", () => {
