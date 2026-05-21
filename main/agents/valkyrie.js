@@ -76,8 +76,9 @@ class ValkyrieEngine {
       return null;
     }
 
-    // Create execution checkpoints record array
+    // Create execution checkpoints record array and virtual filesystem
     const executionResults = [];
+    const virtualFilesystem = new Map();
 
     // --- STEP 2: CODING & REVIEWING FOR EACH TASK ---
     for (let i = 0; i < plan.length; i++) {
@@ -97,7 +98,9 @@ class ValkyrieEngine {
       
       // Load current target file contents (might be newly created or updated by earlier tasks)
       try {
-        if (fsSync.existsSync(targetFileAbsPath)) {
+        if (virtualFilesystem.has(task.assignedFile)) {
+          taskFileContent = virtualFilesystem.get(task.assignedFile);
+        } else if (fsSync.existsSync(targetFileAbsPath)) {
           taskFileContent = await fs.readFile(targetFileAbsPath, 'utf8');
         } else {
           taskFileContent = ""; // New file to be created
@@ -153,9 +156,8 @@ class ValkyrieEngine {
             priorFeedback.push(`Attempt ${attempts} Feedback (Score: ${review.score}/100):\n${review.feedback}`);
           }
         } catch (err) {
-          // If reviewer fails, warn and auto-approve to avoid lockups
           console.warn("Reviewer check failed:", err);
-          approved = true; 
+          priorFeedback.push(`Attempt ${attempts} Feedback (Reviewer Error):\nThe reviewer agent failed to process the changes: ${err.message}`);
         }
       }
 
@@ -170,33 +172,28 @@ class ValkyrieEngine {
 
       // Apply the patch safely in-memory
       const patchedContent = applyPatch(taskFileContent, proposedDiff);
+      virtualFilesystem.set(task.assignedFile, patchedContent);
 
-      // Create a snapshot checkpoint before modifying actual disk
+      // Create a snapshot checkpoint of the original disk state
       let checkpointId = null;
       try {
-        checkpointId = await this.createCheckpoint(conversationId, task.assignedFile, taskFileContent);
+        const originalDiskContent = fsSync.existsSync(targetFileAbsPath) ? await fs.readFile(targetFileAbsPath, 'utf8') : "";
+        checkpointId = await this.createCheckpoint(conversationId, task.assignedFile, originalDiskContent);
       } catch (checkpointErr) {
         console.error("Checkpoint backup failed:", checkpointErr);
       }
 
-      // Write patched contents to the file system
-      try {
-        await fs.mkdir(path.dirname(targetFileAbsPath), { recursive: true });
-        await fs.writeFile(targetFileAbsPath, patchedContent, 'utf8');
-        
-        task.status = 'completed';
-        this.emit('valkyrie:task-update', { taskId: task.id, status: 'completed' });
-        
-        executionResults.push({
-          task,
-          filePath: task.assignedFile,
-          checkpointId,
-          diff: proposedDiff
-        });
-      } catch (writeErr) {
-        this.emit('valkyrie:error', { message: `Failed writing changes to disk: ${writeErr.message}` });
-        return null;
-      }
+      task.status = 'completed';
+      this.emit('valkyrie:task-update', { taskId: task.id, status: 'completed' });
+      
+      executionResults.push({
+        task,
+        filePath: task.assignedFile,
+        checkpointId,
+        diff: proposedDiff,
+        originalContent: taskFileContent,
+        proposedContent: patchedContent
+      });
     }
 
     if (this.aborted) {

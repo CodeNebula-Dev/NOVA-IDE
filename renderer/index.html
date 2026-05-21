@@ -12,6 +12,7 @@
   </head>
   <body>
     <div id="app">
+      <!-- Primary Navigation Bar -->
       <header class="topbar">
         <div class="brand">
           <span class="brand-pulse"></span>
@@ -25,6 +26,47 @@
           <button id="settingsBtn" class="secondary-btn">Settings</button>
         </div>
       </header>
+
+      <!-- Sticky Agent Panel (Top Bar) -->
+      <div class="agent-panel-sticky">
+        <div class="agent-status-bar">
+          <div class="agent-badges">
+            <span class="agent-badge" data-role="planner" title="DeepSeek R1 - Planning">📝 Planner</span>
+            <span class="agent-badge" data-role="coder" title="Qwen3-Coder - Code Generation">💻 Coder</span>
+            <span class="agent-badge" data-role="reviewer" title="Llama 3.3 - Review">🧐 Reviewer</span>
+            <span class="agent-badge" data-role="fast" title="Gemini Flash - Quick Suggestions">⚡ Fast</span>
+          </div>
+
+          <!-- Model Selector Dropdown -->
+          <select id="modelModeSelect" class="model-mode-select" title="Choose AI agent mode">
+            <option value="valkyrie">🚀 Valkyrie Engine (Multi-Agent)</option>
+            <option value="deepseek">🧠 DeepSeek R1 (Thinking)</option>
+            <option value="qwen">💻 Qwen Coder (Fast)</option>
+            <option value="llama">🦙 Llama 3.3 (Balanced)</option>
+          </select>
+
+          <div class="agent-status-display">
+            <span id="agentStatusDot" class="status-dot"></span>
+            <span id="agentStatusText">Ready</span>
+            <span id="activeFilesCount" class="active-files">📂 3 files</span>
+          </div>
+        </div>
+
+        <div class="agent-input-bar">
+          <input
+            id="agentPromptInput"
+            type="text"
+            class="agent-prompt-input"
+            placeholder="Type your prompt... (⌘Enter to send)"
+            autocomplete="off"
+          />
+          <div class="agent-input-actions">
+            <button id="sendAgentPromptBtn" class="primary-btn" title="Send prompt (⌘Enter)">⚡ Send</button>
+            <button id="addContextBtn" class="secondary-btn" title="Add active file as context">+Context</button>
+            <button id="toggleChatHistoryBtn" class="secondary-btn" title="Show chat history">📋</button>
+          </div>
+        </div>
+      </div>
 
       <main class="ide-grid">
         <aside class="panel panel-left">
@@ -49,7 +91,13 @@
               </div>
             </div>
             <div id="monacoEditorContainer" style="flex: 1; height: 100%; width: 100%;"></div>
-            <div id="monacoDiffContainer" class="hidden" style="flex: 1; height: 100%; width: 100%;"></div>
+            <div id="diffViewerWrapper" class="hidden" style="flex: 1; height: 100%; width: 100%; display: flex; flex-direction: row; overflow: hidden;">
+              <div id="diffSidebar" style="width: 220px; background: #11111b; border-right: 1px solid var(--line); display: flex; flex-direction: column;">
+                <div style="padding: 10px; font-size: 0.8rem; font-weight: bold; border-bottom: 1px solid var(--line); color: #cdd6f4;">Modified Files</div>
+                <ul id="diffFileList" style="list-style: none; padding: 0; margin: 0; overflow-y: auto; font-size: 0.75rem;"></ul>
+              </div>
+              <div id="monacoDiffContainer" style="flex: 1; height: 100%; min-width: 0;"></div>
+            </div>
           </div>
           <div class="status-bar">
             <span id="statusLanguage">plaintext</span>

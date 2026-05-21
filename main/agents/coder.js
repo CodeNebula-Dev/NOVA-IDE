@@ -100,22 +100,15 @@ function applyPatch(source, patch) {
   const lines = source.split("\n");
   const patchLines = patch.split("\n");
   
-  let currentLine = 0;
   const result = [];
   
   let i = 0;
-  // Locate the first hunk header
   while (i < patchLines.length) {
-    const line = patchLines[i];
-    if (line.startsWith("@@")) {
-      break;
-    }
+    if (patchLines[i].startsWith("@@")) break;
     i++;
   }
 
   if (i >= patchLines.length) {
-    // If no hunk header is found, the coder might have just returned the new code.
-    // Try to strip backticks and return if it looks like full content.
     let cleaned = patch.trim();
     if (cleaned.startsWith("```")) {
       const match = cleaned.match(/```(?:[\w.+-]+)?\n([\s\S]*?)```/);
@@ -124,7 +117,17 @@ function applyPatch(source, patch) {
     return cleaned;
   }
 
-  let originalIndex = 0; // index in lines array
+  let originalIndex = 0; 
+  
+  function checkMatch(linesArr, hunkOldArr, startIndex) {
+    if (startIndex < 0 || startIndex + hunkOldArr.length > linesArr.length) return false;
+    for (let j = 0; j < hunkOldArr.length; j++) {
+      if (linesArr[startIndex + j].trim() !== hunkOldArr[j].trim()) {
+        return false;
+      }
+    }
+    return true;
+  }
   
   while (i < patchLines.length) {
     const header = patchLines[i];
@@ -133,23 +136,16 @@ function applyPatch(source, patch) {
       continue;
     }
 
-    // Parse @@ -start,count +start,count @@
     const match = header.match(/@@\s*-(\d+),?(\d*)\s*\+(\d+),?(\d*)\s*@@/);
     if (!match) {
       i++;
       continue;
     }
 
-    const startOld = parseInt(match[1]) - 1; // 0-indexed
+    const startOld = parseInt(match[1]) - 1; 
     const countOld = parseInt(match[2] || "1");
     
-    // Add all lines from current index to startOld
-    while (originalIndex < startOld && originalIndex < lines.length) {
-      result.push(lines[originalIndex]);
-      originalIndex++;
-    }
-
-    i++; // Move past @@ header
+    i++; 
     
     const hunkOld = [];
     const hunkNew = [];
@@ -164,19 +160,49 @@ function applyPatch(source, patch) {
         hunkOld.push(line.slice(1));
         hunkNew.push(line.slice(1));
       } else {
-        // Fallback for lines without prefix (neutral context)
         hunkOld.push(line);
         hunkNew.push(line);
       }
       i++;
     }
 
-    // Replace old lines with new lines
-    result.push(...hunkNew);
-    originalIndex += countOld;
+    // Fuzzy Search for hunkOld
+    let matchIndex = -1;
+    if (hunkOld.length === 0) {
+      matchIndex = Math.max(0, Math.min(startOld, lines.length));
+    } else {
+      const searchRadius = 100; // Search 100 lines up and down
+      for (let offset = 0; offset <= searchRadius; offset++) {
+        if (checkMatch(lines, hunkOld, startOld + offset)) {
+          matchIndex = startOld + offset;
+          break;
+        }
+        if (offset > 0 && checkMatch(lines, hunkOld, startOld - offset)) {
+          matchIndex = startOld - offset;
+          break;
+        }
+      }
+    }
+
+    if (matchIndex !== -1) {
+      // We found the exact context window, apply it safely
+      while (originalIndex < matchIndex && originalIndex < lines.length) {
+        result.push(lines[originalIndex]);
+        originalIndex++;
+      }
+      result.push(...hunkNew);
+      originalIndex += hunkOld.length;
+    } else {
+      // Fallback to naive strict application if context is heavily distorted
+      while (originalIndex < startOld && originalIndex < lines.length) {
+        result.push(lines[originalIndex]);
+        originalIndex++;
+      }
+      result.push(...hunkNew);
+      originalIndex += countOld;
+    }
   }
 
-  // Append remaining original lines
   while (originalIndex < lines.length) {
     result.push(lines[originalIndex]);
     originalIndex++;

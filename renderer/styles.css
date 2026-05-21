@@ -125,10 +125,11 @@ select {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 280px 1fr 370px;
+  grid-template-columns: 280px 1fr;
   gap: 12px;
   padding: 12px;
 }
+
 
 .panel {
   min-height: 0;
@@ -783,5 +784,430 @@ select {
     transform: scale(1.15);
     background: #ffc945;
   }
+}
+
+/* ============================================================================
+   PHASE 3 UI/UX: STICKY AGENT PANEL & DIFF VIEWER
+   ============================================================================ */
+
+/* Sticky Agent Panel (Top Bar) */
+.agent-panel-sticky {
+  background: #101420;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: sticky;
+  top: 52px;
+  z-index: 100;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.agent-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.84rem;
+}
+
+.agent-badges {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.agent-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: rgba(124, 106, 255, 0.12);
+  border: 1px solid rgba(124, 106, 255, 0.3);
+  border-radius: 6px;
+  color: #a6b3ff;
+  font-size: 0.78rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.agent-badge:hover {
+  background: rgba(124, 106, 255, 0.25);
+  border-color: var(--accent);
+  color: #cdd6f4;
+}
+
+.agent-badge.active {
+  background: rgba(59, 214, 113, 0.2);
+  border-color: #3bd671;
+  color: #3bd671;
+}
+
+.model-mode-select {
+  padding: 6px 12px;
+  background: rgba(49, 38, 91, 0.6);
+  border: 1px solid rgba(124, 106, 255, 0.3);
+  border-radius: 6px;
+  color: #cdd6f4;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.model-mode-select:hover {
+  background: rgba(49, 38, 91, 0.9);
+  border-color: var(--accent);
+}
+
+.model-mode-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 8px rgba(124, 106, 255, 0.4);
+}
+
+.model-mode-select option {
+  background: #1e1d2e;
+  color: #cdd6f4;
+}
+
+.agent-status-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #94a2c6;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #888;
+  transition: all 0.3s ease;
+}
+
+.status-dot.ready {
+  background: #3bd671;
+  box-shadow: 0 0 8px #3bd671;
+}
+
+.status-dot.active {
+  background: #ffc945;
+  box-shadow: 0 0 8px #ffc945;
+  animation: pulse 1.5s infinite;
+}
+
+.status-dot.error {
+  background: #ff6170;
+  box-shadow: 0 0 8px #ff6170;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.active-files {
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+  color: #7c8aa8;
+  font-size: 0.78rem;
+}
+
+/* Agent Input Bar */
+.agent-input-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.agent-prompt-input {
+  flex: 1;
+  background: #171d2b;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: #d8def2;
+  font-family: "Syne", system-ui, sans-serif;
+  font-size: 0.9rem;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.agent-prompt-input:focus {
+  border-color: var(--accent);
+  background: #1a202d;
+  box-shadow: 0 0 0 2px rgba(124, 106, 255, 0.1);
+}
+
+.agent-prompt-input::placeholder {
+  color: #60719c;
+}
+
+.agent-input-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.agent-input-actions button {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+/* Diff Viewer Styles */
+.diff-container {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  width: 100%;
+  background: var(--panel);
+}
+
+.diff-sidebar {
+  width: 200px;
+  background: var(--panel-soft);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.diff-sidebar-header {
+  padding: 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--line);
+  color: #cdd6f4;
+}
+
+.diff-file-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  overflow-y: auto;
+  font-size: 0.8rem;
+}
+
+.diff-file-item {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(36, 43, 61, 0.5);
+  cursor: pointer;
+  color: #94a2c6;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.diff-file-item:hover {
+  background: rgba(124, 106, 255, 0.1);
+  color: #cdd6f4;
+}
+
+.diff-file-item.active {
+  background: rgba(124, 106, 255, 0.2);
+  border-left: 3px solid var(--accent);
+  color: #a6b3ff;
+  padding-left: 7px;
+}
+
+.diff-file-item .icon {
+  font-size: 1rem;
+}
+
+.diff-file-item .status {
+  margin-left: auto;
+  font-size: 0.7rem;
+  opacity: 0.7;
+}
+
+.diff-editor-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--panel);
+}
+
+/* Inline Diff Decorations in Monaco */
+.diff-line-added {
+  background-color: rgba(61, 214, 113, 0.12);
+  border-left: 3px solid #3bd671;
+}
+
+.diff-line-deleted {
+  background-color: rgba(255, 97, 112, 0.12);
+  border-left: 3px solid #ff6170;
+}
+
+.diff-line-modified {
+  background-color: rgba(250, 226, 175, 0.1);
+  border-left: 3px solid #fae2af;
+}
+
+/* Diff Control Bar */
+.diff-control-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #151a26;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 8px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+
+.diff-control-bar.hidden {
+  display: none !important;
+}
+
+.diff-title {
+  font-weight: 700;
+  font-size: 0.84rem;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.diff-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.diff-actions button {
+  padding: 6px 12px;
+  font-size: 0.78rem;
+}
+
+/* Diff Hunk Review Panel */
+.diff-hunk-review {
+  background: #1a1f2d;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.diff-hunk-header {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #cdd6f4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.diff-hunk-content {
+  background: #0d0f14;
+  border: 1px solid rgba(36, 43, 61, 0.5);
+  border-radius: 6px;
+  padding: 8px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.8rem;
+  overflow-x: auto;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.diff-hunk-content .line {
+  display: flex;
+  gap: 8px;
+  white-space: pre;
+}
+
+.diff-hunk-content .line.added {
+  color: #3bd671;
+  background: rgba(61, 214, 113, 0.08);
+}
+
+.diff-hunk-content .line.deleted {
+  color: #ff6170;
+  background: rgba(255, 97, 112, 0.08);
+}
+
+.diff-hunk-content .line-number {
+  color: #60719c;
+  min-width: 40px;
+  text-align: right;
+  opacity: 0.6;
+}
+
+.diff-hunk-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.diff-hunk-actions button {
+  padding: 4px 8px;
+  font-size: 0.75rem;
+}
+
+/* Chat History Sidebar (Collapsible) */
+.chat-history-panel {
+  background: #131722;
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  position: fixed;
+  right: 0;
+  top: 52px;
+  bottom: 0;
+  z-index: 99;
+  transform: translateX(100%);
+  transition: transform 0.3s ease;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.3);
+}
+
+.chat-history-panel.open {
+  transform: translateX(0);
+}
+
+.chat-history-header {
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  color: #cdd6f4;
+  font-size: 0.9rem;
+}
+
+.chat-history-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.chat-message-item {
+  padding: 8px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.chat-message-item.user {
+  background: rgba(124, 106, 255, 0.1);
+  color: #a6b3ff;
+  border-left: 2px solid var(--accent);
+}
+
+.chat-message-item.assistant {
+  background: rgba(61, 214, 113, 0.08);
+  color: #96c669;
+  border-left: 2px solid #3bd671;
+}
+
+.chat-message-item:hover {
+  background: rgba(124, 106, 255, 0.2);
 }
 
