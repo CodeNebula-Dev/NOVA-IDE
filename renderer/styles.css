@@ -2255,19 +2255,102 @@ body {
 }
 
 .valkyrie-diff-section .diff-content {
-  padding: 10px;
-  background: var(--bg-crust);
+  padding: 12px;
+  background: #0f141c;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
-  line-height: 1.5;
-  color: var(--green);
-  max-height: 250px;
+  font-family: 'Fira Code', 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  color: #a9b2c3;
+  max-height: 300px;
   overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
+  overflow-x: auto;
+  white-space: pre;
+  word-break: normal;
   transition: max-height var(--transition-normal) ease;
+}
+
+/* Surgical Diff Streaming Visualizer Tokens */
+.diff-marker-search {
+  background: rgba(239, 83, 80, 0.12);
+  color: #ef5350;
+  border-left: 4px solid #ef5350;
+  padding: 4px 8px;
+  margin: 6px 0 2px 0;
+  font-weight: bold;
+  font-size: 0.72rem;
+  border-radius: 2px;
+  display: inline-block;
+  width: calc(100% - 16px);
+  user-select: none;
+}
+
+.diff-marker-divider {
+  background: rgba(38, 166, 154, 0.12);
+  color: #26a69a;
+  border-left: 4px solid #26a69a;
+  padding: 4px 8px;
+  margin: 4px 0 4px 0;
+  font-weight: bold;
+  font-size: 0.72rem;
+  border-radius: 2px;
+  display: inline-block;
+  width: calc(100% - 16px);
+  user-select: none;
+}
+
+.diff-marker-replace {
+  background: rgba(102, 187, 106, 0.12);
+  color: #66bb6a;
+  border-left: 4px solid #66bb6a;
+  padding: 4px 8px;
+  margin: 2px 0 6px 0;
+  font-weight: bold;
+  font-size: 0.72rem;
+  border-radius: 2px;
+  display: inline-block;
+  width: calc(100% - 16px);
+  user-select: none;
+}
+
+.diff-line-search {
+  color: #ef9a9a;
+  background: rgba(239, 83, 80, 0.08);
+  display: block;
+  width: fit-content;
+  min-width: 100%;
+  padding-left: 4px;
+  box-sizing: border-box;
+}
+
+.diff-line-replace {
+  color: #a5d6a7;
+  background: rgba(76, 175, 80, 0.08);
+  display: block;
+  width: fit-content;
+  min-width: 100%;
+  padding-left: 4px;
+  box-sizing: border-box;
+}
+
+.diff-line-normal {
+  display: block;
+  width: fit-content;
+  min-width: 100%;
+  padding-left: 4px;
+  box-sizing: border-box;
+}
+
+.diff-header-line {
+  color: #90caf9;
+  font-weight: 500;
+  background: rgba(33, 150, 243, 0.08);
+  display: block;
+  width: fit-content;
+  min-width: 100%;
+  padding: 2px 4px;
+  box-sizing: border-box;
 }
 
 .valkyrie-diff-section.expanded .diff-content {

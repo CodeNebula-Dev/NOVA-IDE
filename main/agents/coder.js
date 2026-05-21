@@ -1,10 +1,106 @@
-/**
- * Coder Agent (Qwen2.5-Coder-32B/72B via OpenRouter)
- * Executes a single planning task and outputs clean unified git-style diffs.
- */
+class StreamThinkFilter {
+  constructor(onData) {
+    this.onData = onData;
+    this.inThink = false;
+    this.buffer = "";
+  }
+
+  feed(chunk) {
+    this.buffer += chunk;
+    this.process();
+  }
+
+  process() {
+    while (true) {
+      if (!this.inThink) {
+        const index = this.buffer.indexOf("<think>");
+        if (index !== -1) {
+          const textBefore = this.buffer.slice(0, index);
+          if (textBefore) {
+            this.onData(textBefore);
+          }
+          this.inThink = true;
+          this.buffer = this.buffer.slice(index + 7);
+        } else {
+          const thinkTag = "<think>";
+          let holdBackLen = 0;
+          for (let i = 1; i < thinkTag.length; i++) {
+            const suffix = this.buffer.slice(-i);
+            if (thinkTag.startsWith(suffix)) {
+              holdBackLen = i;
+            }
+          }
+          if (holdBackLen > 0) {
+            const textToEmit = this.buffer.slice(0, -holdBackLen);
+            if (textToEmit) {
+              this.onData(textToEmit);
+            }
+            this.buffer = this.buffer.slice(-holdBackLen);
+          } else {
+            this.onData(this.buffer);
+            this.buffer = "";
+          }
+          break;
+        }
+      } else {
+        const index = this.buffer.indexOf("</think>");
+        if (index !== -1) {
+          this.inThink = false;
+          this.buffer = this.buffer.slice(index + 8);
+        } else {
+          const endThinkTag = "</think>";
+          let holdBackLen = 0;
+          for (let i = 1; i < endThinkTag.length; i++) {
+            const suffix = this.buffer.slice(-i);
+            if (endThinkTag.startsWith(suffix)) {
+              holdBackLen = i;
+            }
+          }
+          if (holdBackLen > 0) {
+            this.buffer = this.buffer.slice(-holdBackLen);
+          } else {
+            this.buffer = "";
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  flush() {
+    if (!this.inThink && this.buffer) {
+      this.onData(this.buffer);
+    }
+    this.buffer = "";
+  }
+}
 
 async function runCoder(task, fileContent, priorFeedback, apiKey, onDiffChunk) {
-  const systemPrompt = `You are the Lead Software Engineer Agent inside NOVA IDE. Your task is to execute the active architecture plan task and write file modifications.
+  const lineCount = fileContent ? fileContent.split(/\r?\n/).length : 0;
+  const isFeedbackEmpty = !priorFeedback || priorFeedback.length === 0;
+  const forceOptionB = lineCount < 300 || !isFeedbackEmpty;
+
+  let systemPrompt = "";
+  if (forceOptionB) {
+    systemPrompt = `You are the Lead Software Engineer Agent inside NOVA IDE. Your task is to execute the active architecture plan task and write file modifications.
+
+CRITICAL RULE:
+Because the target file is small (under 300 lines) or is being rewritten after prior mismatch feedback, you MUST use Option B: Full-File Replacement.
+Option A (Search-and-Replace blocks) and Option C (Unified diffs) are STRICTLY FORBIDDEN and will fail patch matching!
+
+Option B: Full-File Replacement.
+Output the ENTIRE, COMPLETE file contents inside a single markdown code block matching the file type (e.g. \`\`\`python or \`\`\`javascript). Do not omit any lines, do not use comments like "# rest of code here", and write every single function, import, and helper completely:
+\`\`\`[language]
+[complete file contents]
+\`\`\`
+
+CRITICAL RULES — violating these will cause the task to fail:
+1. Output the COMPLETE file content from the very first line to the very last line.
+2. NEVER leave functions incomplete.
+3. Every single import statement that the file needs MUST be present in the output.
+4. Ensure your output is valid, compile-ready syntax for the target language.`;
+  } else {
+    systemPrompt = `You are the Lead Software Engineer Agent inside NOVA IDE. Your task is to execute the active architecture plan task and write file modifications.
 
 You MUST output file modifications using ONE of these three formats:
 
@@ -35,6 +131,17 @@ CRITICAL RULES — violating these will cause the task to fail:
 4. Every import statement that the new code needs MUST be present in the output.
 5. Choose Option B (full file) if the file is less than 300 lines OR if prior feedback mentions malformed diffs.
 6. Ensure your output is valid, compile-ready syntax for the target language.`;
+  }
+
+  let workspaceFilesText = "";
+  if (task.contextData && task.contextData.workspaceFiles && task.contextData.workspaceFiles.length > 0) {
+    const otherFiles = task.contextData.workspaceFiles.filter(f => f.relativePath !== task.assignedFile);
+    if (otherFiles.length > 0) {
+      workspaceFilesText = "\n\nOther Workspace Files for Context:\n" + otherFiles.map(f => {
+        return `File: ${f.relativePath}\n\`\`\`\n${f.content}\n\`\`\``;
+      }).join("\n\n");
+    }
+  }
 
   let userContent = `Active Task: ${task.description}
 Target File: ${task.assignedFile}
@@ -42,7 +149,7 @@ Target File: ${task.assignedFile}
 Current File Content:
 \`\`\`
 ${fileContent || ""}
-\`\`\``;
+\`\`\`${workspaceFilesText}`;
 
   if (priorFeedback && priorFeedback.length > 0) {
     const feedbackText = priorFeedback.join("\n");
@@ -50,7 +157,10 @@ ${fileContent || ""}
                              feedbackText.toLowerCase().includes("syntax error") ||
                              feedbackText.toLowerCase().includes("no proposed diff") ||
                              feedbackText.toLowerCase().includes("stray diff marker") ||
-                             feedbackText.toLowerCase().includes("incomplete");
+                             feedbackText.toLowerCase().includes("incomplete") ||
+                             feedbackText.toLowerCase().includes("could not be matched") ||
+                             feedbackText.toLowerCase().includes("failed to apply") ||
+                             feedbackText.toLowerCase().includes("patch failed");
     
     userContent += `\n\nPrior Review Feedback (FAILED VERIFICATION — attempt ${priorFeedback.length} of 3):
 ${feedbackText}
@@ -65,7 +175,7 @@ MANDATORY RETRY INSTRUCTIONS:
     // Fall back to free Pollinations API
     const apiURL = "https://text.pollinations.ai/v1/chat/completions";
     
-    onDiffChunk("No API Key detected. Using free Pollinations fallback...\n");
+    // (Removed streamed warning log from diff stream)
     
     const maxRetries = 3;
     const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -94,37 +204,47 @@ MANDATORY RETRY INSTRUCTIONS:
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
         let fullDiff = "";
+        const filter = new StreamThinkFilter((cleanText) => {
+          fullDiff += cleanText;
+          onDiffChunk(cleanText);
+        });
         
+        let streamBuffer = "";
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split("\n").filter(line => line.trim().startsWith("data:"));
+          streamBuffer += decoder.decode(value, { stream: true });
           
-          for (const line of lines) {
-            const dataStr = line.slice(5).trim();
-            if (dataStr === "[DONE]") continue;
+          let lineIndex;
+          while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
+            const line = streamBuffer.slice(0, lineIndex).trim();
+            streamBuffer = streamBuffer.slice(lineIndex + 1);
             
-            try {
-              const parsed = JSON.parse(dataStr);
-              const text = parsed?.choices?.[0]?.delta?.content || "";
-              if (text) {
-                fullDiff += text;
-                onDiffChunk(text);
+            if (line.startsWith("data:")) {
+              const dataStr = line.slice(5).trim();
+              if (dataStr === "[DONE]") continue;
+              
+              try {
+                const parsed = JSON.parse(dataStr);
+                const text = parsed?.choices?.[0]?.delta?.content || "";
+                if (text) {
+                  filter.feed(text);
+                }
+              } catch (e) {
+                // Ignore JSON parse errors
               }
-            } catch (e) {
-              // Ignore JSON parse errors for incomplete chunks
             }
           }
         }
         
+        filter.flush();
         return fullDiff.trim();
       } catch (err) {
         if (attempt === maxRetries) {
           throw err;
         }
-        onDiffChunk(`[Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying in 3 seconds...]\n`);
+        console.warn(`[Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying in 3 seconds...]`);
         await delay(3000);
       }
     }
@@ -159,37 +279,44 @@ MANDATORY RETRY INSTRUCTIONS:
   const reader = response.body.getReader();
   const decoder = new TextDecoder("utf-8");
   let fullDiff = "";
+  const filter = new StreamThinkFilter((cleanText) => {
+    fullDiff += cleanText;
+    onDiffChunk(cleanText);
+  });
 
+  let streamBuffer = "";
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    const chunk = decoder.decode(value, { stream: true });
-    const lines = chunk.split("\n").filter(line => line.trim().startsWith("data:"));
+    streamBuffer += decoder.decode(value, { stream: true });
     
-    for (const line of lines) {
-      const dataStr = line.slice(5).trim();
-      if (dataStr === "[DONE]") continue;
+    let lineIndex;
+    while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
+      const line = streamBuffer.slice(0, lineIndex).trim();
+      streamBuffer = streamBuffer.slice(lineIndex + 1);
+      
+      if (line.startsWith("data:")) {
+        const dataStr = line.slice(5).trim();
+        if (dataStr === "[DONE]") continue;
 
-      try {
-        const parsed = JSON.parse(dataStr);
-        const text = parsed?.choices?.[0]?.delta?.content || "";
-        if (text) {
-          fullDiff += text;
-          onDiffChunk(text);
+        try {
+          const parsed = JSON.parse(dataStr);
+          const text = parsed?.choices?.[0]?.delta?.content || "";
+          if (text) {
+            filter.feed(text);
+          }
+        } catch (e) {
+          // Ignore JSON error
         }
-      } catch (e) {
-        // Ignore JSON error
       }
     }
   }
 
+  filter.flush();
   return fullDiff.trim();
 }
 
-/**
- * Applies a search-and-replace block patch to a source string.
- */
 function applySearchReplaceBlocks(source, patch) {
   // 1. Robust state-based parsing of blocks
   const lines = patch.split(/\r?\n/);
@@ -248,50 +375,40 @@ function applySearchReplaceBlocks(source, patch) {
     // Try exact match first
     if (currentSource.includes(searchNormalized)) {
       currentSource = currentSource.replace(searchNormalized, replaceNormalized);
-    } else {
-      // Try exact match with trimmed spaces
-      const searchStr = searchNormalized.trim();
-      if (currentSource.includes(searchStr)) {
-        currentSource = currentSource.replace(searchStr, replaceNormalized);
-      } else {
-        // Line-by-line fuzzy match (ignoring leading/trailing whitespace on each line)
-        const searchLines = searchNormalized.split("\n").map(l => l.trim()).filter(Boolean);
-        if (searchLines.length > 0) {
-          const sourceLines = currentSource.split("\n");
-          let foundStart = -1;
-          for (let i = 0; i < sourceLines.length; i++) {
-            if (sourceLines[i].trim() === searchLines[0]) {
-              let match = true;
-              for (let j = 0; j < searchLines.length; j++) {
-                if (i + j >= sourceLines.length || sourceLines[i + j].trim() !== searchLines[j]) {
-                  match = false;
-                  break;
-                }
-              }
-              if (match) {
-                foundStart = i;
-                break;
-              }
-            }
-          }
-          if (foundStart !== -1) {
-            let sourceLineIndex = foundStart;
-            let matchedSearchCount = 0;
-            const linesToReplace = [];
-            while (sourceLineIndex < sourceLines.length && matchedSearchCount < searchLines.length) {
-              if (sourceLines[sourceLineIndex].trim() === searchLines[matchedSearchCount]) {
-                matchedSearchCount++;
-              }
-              linesToReplace.push(sourceLineIndex);
-              sourceLineIndex++;
-            }
-            if (matchedSearchCount === searchLines.length) {
-              sourceLines.splice(foundStart, linesToReplace.length, replaceNormalized);
-              currentSource = sourceLines.join("\n");
-            }
-          }
+      continue;
+    }
+
+    // Try exact match with trimmed spaces on the whole block
+    const searchStr = searchNormalized.trim();
+    if (currentSource.includes(searchStr)) {
+      currentSource = currentSource.replace(searchStr, replaceNormalized);
+      continue;
+    }
+
+    // Strict contiguous relaxed matching
+    const searchLines = searchNormalized.split("\n");
+    const sourceLines = currentSource.split("\n");
+    let matchStartIdx = -1;
+
+    for (let i = 0; i <= sourceLines.length - searchLines.length; i++) {
+      let isMatch = true;
+      for (let j = 0; j < searchLines.length; j++) {
+        if (sourceLines[i + j].trim() !== searchLines[j].trim()) {
+          isMatch = false;
+          break;
         }
       }
+      if (isMatch) {
+        matchStartIdx = i;
+        break; // Found contiguous match!
+      }
+    }
+
+    if (matchStartIdx !== -1) {
+      sourceLines.splice(matchStartIdx, searchLines.length, replaceNormalized);
+      currentSource = sourceLines.join("\n");
+    } else {
+      throw new Error(`Could not find a match for search block:\n${searchNormalized}`);
     }
   }
 
@@ -302,12 +419,12 @@ function applySearchReplaceBlocks(source, patch) {
  * Applies a unified diff or search-and-replace string to a source string, returning the modified source string.
  * This is a lightweight robust patch utility for the agent environment.
  */
-function applyPatch(source, patch) {
+function _applyPatchInternal(source, patch) {
   let cleaned = patch.trim();
   
   // 1. Try to extract markdown code fences or custom tag blocks
-  const codeBlockMatch = cleaned.match(/```(?:[\w.+-]+)?\n([\s\S]*?)```/) || 
-                         cleaned.match(/<nova-code>([\s\S]*?)<\/nova-code>/);
+  const codeBlockMatch = cleaned.match(/```(?:[\w.+-]+)?\r?\n([\s\S]*?)\r?\n```/) || 
+                          cleaned.match(/<nova-code>([\s\S]*?)<\/nova-code>/);
   
   let codeBlockContent = null;
   if (codeBlockMatch) {
@@ -450,6 +567,37 @@ function applyPatch(source, patch) {
   }
 
   return result.join("\n");
+}
+
+function applyPatch(source, patch) {
+  const hasCRLF = source.includes("\r\n");
+  const result = _applyPatchInternal(source, patch);
+  
+  if (typeof result === 'string') {
+    if (result.trim() === "" && source && source.trim() !== "") {
+      throw new Error("Patch application resulted in empty content. Rejecting empty code replacement.");
+    }
+    
+    let cleanLines = result.split(/\r?\n/);
+    cleanLines = cleanLines.filter(line => {
+      const trimmed = line.trim();
+      return !trimmed.startsWith("<<<<<<< SEARCH") && 
+             !trimmed.startsWith("=======") && 
+             !trimmed.startsWith(">>>>>>> REPLACE") &&
+             !trimmed.startsWith(">>>>>>>");
+    });
+    
+    const finalResult = cleanLines.join(hasCRLF ? "\r\n" : "\n");
+    if (finalResult.trim() === "" && source && source.trim() !== "") {
+      throw new Error("Patch application resulted in empty content after cleaning. Rejecting empty code replacement.");
+    }
+    return finalResult;
+  }
+  
+  if (!result) {
+    throw new Error("Patch application failed to produce any output.");
+  }
+  return result;
 }
 
 module.exports = {
