@@ -6,14 +6,6 @@
 const { StreamParser, parsePartialJSONArray } = require('./parser');
 
 async function runPlanner(userPrompt, contextData, apiKey, onThought, onPlanReady) {
-  if (!apiKey || apiKey.trim() === "") {
-    throw new Error("OpenRouter API Key is missing. Please type a valid OpenRouter API Key in the settings sidebar to use the Edit agent.");
-  }
-
-  // Use DeepSeek R1 via OpenRouter
-  const model = "deepseek/deepseek-r1:free"; // Default to free tier
-  const apiURL = "https://openrouter.ai/api/v1/chat/completions";
-
   const systemPrompt = `You are the Lead Architect Agent inside NOVA IDE. Your objective is to analyze a developer's request, inspect the codebase context, and construct a highly precise, actionable planning checklist of tasks.
 
 Each task MUST specify:
@@ -39,6 +31,124 @@ ${contextData.activeFileContent || ""}
 
 User Request:
 ${userPrompt}`;
+
+  if (!apiKey || apiKey.trim() === "") {
+    // Fall back to free Pollinations API
+    const apiURL = "https://text.pollinations.ai/v1/chat/completions";
+    const systemPromptFallback = `You are the Lead Architect Agent inside NOVA IDE.
+Your objective is to inspect the codebase context and developer request, and construct a precise plan of tasks as a JSON array.
+
+Each task in the array MUST specify:
+1. "id": unique string, e.g. "task-1"
+2. "description": short explanation of modifications
+3. "assignedFile": relative file path that needs editing (e.g. "main.js")
+
+Return a raw JSON array matching this schema:
+[
+  { "id": "task-1", "description": "Add a hello world log", "assignedFile": "main.js" }
+]
+
+CRITICAL: Return ONLY the raw JSON array. No other text, no markdown backticks, no explanations. Just the JSON array.`;
+
+    const body = JSON.stringify({
+      messages: [
+        { role: "system", content: systemPromptFallback },
+        { role: "user", content: userContent }
+      ],
+      model: "openai",
+      seed: 42,
+      private: true
+    });
+    
+    onThought("No API Key detected. Using free Pollinations fallback...\nThinking...");
+    
+    const response = await fetch(apiURL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Pollinations free API error ${response.status}`);
+    }
+    
+    const resText = await response.text();
+    let resultText = "";
+    try {
+      const data = JSON.parse(resText);
+      const msg = data?.choices?.[0]?.message;
+      if (msg) {
+        resultText = msg.content || "";
+        const reasoning = msg.reasoning || "";
+        if (reasoning) {
+          onThought(reasoning);
+          if (!resultText) {
+            resultText = reasoning;
+          }
+        }
+      } else {
+        resultText = resText;
+      }
+    } catch (e) {
+      resultText = resText;
+    }
+    
+    // Extract thought logs inside <think>...</think>
+    let thought = "";
+    const thinkMatch = resultText.match(/<think>([\s\S]*?)<\/think>/);
+    if (thinkMatch) {
+      thought = thinkMatch[1].trim();
+      onThought(thought);
+      resultText = resultText.replace(/<think>[\s\S]*?<\/think>/, "").trim();
+    } else {
+      // If no think tag was found and we didn't output deep reasoning either, send completion notice
+      if (!resText.includes('"reasoning"')) {
+        onThought("Pollinations planning complete.");
+      }
+    }
+    
+    // Extract JSON payload using the new robust index matching
+    let parsedPlan = null;
+    const firstBracket = resultText.indexOf("[");
+    const lastBracket = resultText.lastIndexOf("]");
+    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+      const jsonStr = resultText.slice(firstBracket, lastBracket + 1);
+      try {
+        parsedPlan = JSON.parse(jsonStr.trim());
+      } catch (e) {
+        parsedPlan = parsePartialJSONArray(jsonStr);
+      }
+    }
+
+    if (!parsedPlan || !Array.isArray(parsedPlan) || parsedPlan.length === 0) {
+      // Try parsing the entire resultText just in case it didn't use brackets
+      try {
+        parsedPlan = JSON.parse(resultText.trim());
+      } catch (e) {
+        parsedPlan = parsePartialJSONArray(resultText);
+      }
+    }
+    
+    if (!parsedPlan || !Array.isArray(parsedPlan) || parsedPlan.length === 0) {
+      console.warn("Valkyrie Planner fallback parsing failed, synthesizing default task.");
+      const activeFile = contextData.activeFilePath || "main.js";
+      parsedPlan = [
+        {
+          id: "task-1",
+          description: userPrompt,
+          assignedFile: activeFile
+        }
+      ];
+      onThought("\n[Note: Planner JSON extraction was malformed. Auto-synthesized single-task execution plan to proceed.]");
+    }
+    
+    onPlanReady(parsedPlan, true);
+    return parsedPlan;
+  }
+
+  // Use DeepSeek R1 via OpenRouter
+  const model = "deepseek/deepseek-r1:free"; // Default to free tier
+  const apiURL = "https://openrouter.ai/api/v1/chat/completions";
 
   const response = await fetch(apiURL, {
     method: "POST",

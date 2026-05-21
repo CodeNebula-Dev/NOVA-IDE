@@ -360,6 +360,129 @@ ipcMain.handle("valkyrie:review-selection", async (event, text, activeFilePath, 
 });
 
 
+// ── Single-agent chat (Chat / Edit / Explain / Debug) ──────────────────────
+// Uses Pollinations by default (no API key). Falls back to OpenRouter if key present.
+ipcMain.handle("agent:chat", async (event, { agent, prompt, filePath, fileContent, apiKeys, mode }) => {
+  const https = require("https");
+
+  const modePrompts = {
+    chat:    (f, l) => `You are Nova, an expert AI coding assistant. The user has ${f} open. Be concise and precise.`,
+    edit:    (f, l) => `You are Nova, a code-editing agent. Return ONLY the COMPLETE updated file content for ${f} inside a <nova-code> block, with a one-line explanation before it.`,
+    explain: (f, l) => `You are Nova, a code explainer. Explain the code in ${f} clearly. Short paragraphs, plain language.`,
+    debug:   (f, l) => `You are Nova, a debugging agent for ${f}. Find bugs, explain each one briefly, then provide the COMPLETE fixed file inside a <nova-code> block.`
+  };
+
+  const systemPrompt = (modePrompts[mode] || modePrompts.chat)(filePath || "the file", "code");
+
+  const messages = [
+    { role: "system", content: systemPrompt },
+    {
+      role: "user",
+      content: filePath
+        ? `Active file: \`${filePath}\`\n\`\`\`\n${(fileContent || "").slice(0, 6000)}\n\`\`\`\n\n${prompt}`
+        : prompt
+    }
+  ];
+
+  const orKey = apiKeys?.openrouter || "";
+
+  // --- Call OpenRouter if key present, otherwise Pollinations ---
+  let rawText = "";
+
+  if (orKey) {
+    const modelMap = {
+      deepseek: "deepseek/deepseek-r1:free",
+      qwen:     "qwen/qwen3-coder:free",
+      llama:    "meta-llama/llama-3.3-70b-instruct:free",
+      gemma:    "google/gemma-3-27b-it:free"
+    };
+    const model = modelMap[agent] || "meta-llama/llama-3.3-70b-instruct:free";
+    const body = JSON.stringify({ model, messages, max_tokens: 2048 });
+
+    const orResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${orKey}`,
+        "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE",
+        "X-Title": "Nova IDE"
+      },
+      body
+    });
+    if (!orResponse.ok) {
+      const errText = await orResponse.text();
+      throw new Error(`OpenRouter error ${orResponse.status}: ${errText.slice(0, 200)}`);
+    }
+    const data = await orResponse.json();
+    rawText = data?.choices?.[0]?.message?.content || "";
+  } else {
+    // Pollinations — completely free, no key
+    const polBody = JSON.stringify({ messages, model: "openai", seed: 42, private: true });
+    const polResponse = await fetch("https://text.pollinations.ai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: polBody
+    });
+    if (!polResponse.ok) throw new Error(`Pollinations error ${polResponse.status}`);
+    const resText = await polResponse.text();
+    try {
+      const data = JSON.parse(resText);
+      rawText = data?.choices?.[0]?.message?.content || resText;
+    } catch (e) {
+      rawText = resText;
+    }
+  }
+
+  // Extract code block if present
+  const codeMatch = rawText.match(/<nova-code>([\s\S]*?)<\/nova-code>/) ||
+                    rawText.match(/```[\w]*\n([\s\S]*?)```/);
+  const code = codeMatch ? codeMatch[1].trim() : null;
+  const text = rawText
+    .replace(/<nova-code>[\s\S]*?<\/nova-code>/g, "")
+    .replace(/```[\w]*\n[\s\S]*?```/g, "")
+    .trim();
+
+  return { text: text || (code ? "Here is the updated code:" : ""), code, raw: rawText };
+});
+
+ipcMain.handle("agent:inline-edit", async (event, { instruction, selectedCode, fullFileContent, filePath, apiKeys }) => {
+  const orKey = apiKeys?.openrouter || "";
+  const systemPrompt = `You are Nova, a precise code editor. The user selected code in ${filePath || 'their file'} and wants you to edit it. Return ONLY the replacement code — no explanations, no markdown fences, no extra text. Just the code that should replace the selection.`;
+  
+  const messages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: `Selected code:\n\`\`\`\n${selectedCode}\n\`\`\`\n\nInstruction: ${instruction}` }
+  ];
+
+  let result = "";
+  if (orKey) {
+    const body = JSON.stringify({ model: "qwen/qwen3-coder:free", messages, max_tokens: 2048 });
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${orKey}`, "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE", "X-Title": "Nova IDE" },
+      body
+    });
+    if (!response.ok) throw new Error(`OpenRouter error ${response.status}`);
+    const data = await response.json();
+    result = data?.choices?.[0]?.message?.content || "";
+  } else {
+    const body = JSON.stringify({ messages, model: "openai", seed: 42, private: true });
+    const response = await fetch("https://text.pollinations.ai/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    if (!response.ok) throw new Error(`Pollinations error ${response.status}`);
+    const resText = await response.text();
+    try {
+      const data = JSON.parse(resText);
+      result = data?.choices?.[0]?.message?.content || resText;
+    } catch (e) {
+      result = resText;
+    }
+  }
+
+  // Clean up: remove markdown fences if present
+  result = result.replace(/^```[\w]*\n/, '').replace(/\n```$/, '').trim();
+  return { code: result };
+});
+
 app.whenReady().then(() => {
   initializeDatabase();
   createMainWindow();
