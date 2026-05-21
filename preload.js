@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld("novaAPI", {
   valkyrie: {
     execute: (conversationId, prompt, activeFilePath, apiKeys) => 
       ipcRenderer.invoke("valkyrie:execute", conversationId, prompt, activeFilePath, apiKeys),
+    reviewSelection: (text, contextFilePath, apiKeys) => 
+      ipcRenderer.invoke("valkyrie:review-selection", text, contextFilePath, apiKeys),
     abort: () => ipcRenderer.invoke("valkyrie:abort"),
     getEnvKeys: () => ipcRenderer.invoke("valkyrie:get-env-keys"),
     

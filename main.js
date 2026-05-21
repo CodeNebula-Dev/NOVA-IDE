@@ -348,6 +348,17 @@ ipcMain.handle("valkyrie:get-env-keys", () => {
   };
 });
 
+const { runReviewer } = require("./main/agents/reviewer");
+ipcMain.handle("valkyrie:review-selection", async (event, text, activeFilePath, apiKeys) => {
+  try {
+    const task = { description: "Analyze the following code selection for bugs, syntax errors, or potential optimizations." };
+    const review = await runReviewer(task, text, text, apiKeys);
+    return review;
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
 
 app.whenReady().then(() => {
   initializeDatabase();
