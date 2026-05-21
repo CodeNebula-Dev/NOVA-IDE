@@ -1,226 +1,280 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Nova IDE</title>
-    <link rel="stylesheet" href="./styles.css" />
-    <link rel="stylesheet" href="../node_modules/xterm/css/xterm.css" />
-    <script src="../node_modules/xterm/lib/xterm.js"></script>
-    <script src="../node_modules/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
-    <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
-  </head>
-  <body>
-    <div id="app">
-      <!-- Primary Navigation Bar -->
-      <header class="topbar">
-        <div class="brand">
-          <span class="brand-pulse"></span>
-          <h1>Nova IDE</h1>
-        </div>
-        <div class="workspace-controls">
-          <span id="workspaceLabel" class="workspace-label"></span>
-          <button id="openWorkspaceBtn" class="secondary-btn">Open Folder</button>
-          <button id="refreshWorkspaceBtn" class="secondary-btn">Refresh</button>
-          <button id="terminalToggleBtn" class="secondary-btn">Terminal</button>
-          <button id="settingsBtn" class="secondary-btn">Settings</button>
-        </div>
-      </header>
-
-      <!-- Sticky Agent Panel (Top Bar) -->
-      <div class="agent-panel-sticky">
-        <div class="agent-status-bar">
-          <div class="agent-badges">
-            <span class="agent-badge" data-role="planner" title="DeepSeek R1 - Planning">📝 Planner</span>
-            <span class="agent-badge" data-role="coder" title="Qwen3-Coder - Code Generation">💻 Coder</span>
-            <span class="agent-badge" data-role="reviewer" title="Llama 3.3 - Review">🧐 Reviewer</span>
-            <span class="agent-badge" data-role="fast" title="Gemini Flash - Quick Suggestions">⚡ Fast</span>
-          </div>
-
-          <!-- Model Selector Dropdown -->
-          <select id="modelModeSelect" class="model-mode-select" title="Choose AI agent mode">
-            <option value="valkyrie">🚀 Valkyrie Engine (Multi-Agent)</option>
-            <option value="deepseek">🧠 DeepSeek R1 (Thinking)</option>
-            <option value="qwen">💻 Qwen Coder (Fast)</option>
-            <option value="llama">🦙 Llama 3.3 (Balanced)</option>
-          </select>
-
-          <div class="agent-status-display">
-            <span id="agentStatusDot" class="status-dot"></span>
-            <span id="agentStatusText">Ready</span>
-            <span id="activeFilesCount" class="active-files">📂 3 files</span>
-          </div>
-        </div>
-
-        <div class="agent-input-bar">
-          <input
-            id="agentPromptInput"
-            type="text"
-            class="agent-prompt-input"
-            placeholder="Type your prompt... (⌘Enter to send)"
-            autocomplete="off"
-          />
-          <div class="agent-input-actions">
-            <button id="sendAgentPromptBtn" class="primary-btn" title="Send prompt (⌘Enter)">⚡ Send</button>
-            <button id="addContextBtn" class="secondary-btn" title="Add active file as context">+Context</button>
-            <button id="toggleChatHistoryBtn" class="secondary-btn" title="Show chat history">📋</button>
-          </div>
-        </div>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nova IDE</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="../node_modules/xterm/css/xterm.css" />
+  <script src="../node_modules/xterm/lib/xterm.js"></script>
+  <script src="../node_modules/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+  <script src="../node_modules/monaco-editor/min/vs/loader.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- Title Bar -->
+    <header class="titlebar">
+      <div class="brand">
+        <span class="brand-pulse"></span>
+        <span class="brand-name">Nova IDE</span>
       </div>
+      <div class="titlebar-controls">
+        <span id="workspaceLabel" class="workspace-label"></span>
+        <button id="openWorkspaceBtn" class="ghost-btn" title="Open Folder">📂 Open</button>
+        <button id="refreshWorkspaceBtn" class="ghost-btn" title="Refresh">↻</button>
+      </div>
+    </header>
 
-      <main class="ide-grid">
-        <aside class="panel panel-left">
-          <div class="panel-header">
-            <h2>File Manager</h2>
-            <div class="panel-actions">
-              <button id="newFileBtn" class="secondary-btn">+ File</button>
-              <button id="newFolderBtn" class="secondary-btn">+ Folder</button>
+    <!-- Main Application Layout -->
+    <div class="app-layout">
+      <!-- Activity Bar (far left, icon-only) -->
+      <nav class="activity-bar">
+        <div class="activity-bar-top">
+          <button class="activity-btn active" data-panel="explorer" title="Explorer">
+            <!-- File explorer icon - will be set by icons.js -->
+            <span class="activity-icon" id="iconExplorer">📁</span>
+          </button>
+          <button class="activity-btn" data-panel="search" title="Search">
+            <span class="activity-icon" id="iconSearch">🔍</span>
+          </button>
+          <button class="activity-btn" data-panel="ai" title="AI Agent">
+            <span class="activity-icon" id="iconAI">🤖</span>
+          </button>
+        </div>
+        <div class="activity-bar-bottom">
+          <button class="activity-btn" id="terminalToggleBtn" title="Terminal">
+            <span class="activity-icon" id="iconTerminal">⌘</span>
+          </button>
+          <button class="activity-btn" id="settingsBtn" title="Settings">
+            <span class="activity-icon" id="iconSettings">⚙️</span>
+          </button>
+        </div>
+      </nav>
+
+      <!-- Sidebar (file tree, search, etc.) -->
+      <aside class="sidebar" id="sidebar">
+        <!-- Explorer Panel -->
+        <div class="sidebar-panel" id="explorerPanel">
+          <div class="sidebar-header">
+            <span class="sidebar-title">EXPLORER</span>
+            <div class="sidebar-actions">
+              <button id="newFileBtn" class="ghost-btn" title="New File">+📄</button>
+              <button id="newFolderBtn" class="ghost-btn" title="New Folder">+📁</button>
             </div>
           </div>
           <div id="fileTree" class="file-tree"></div>
-        </aside>
+        </div>
 
-        <section class="panel panel-center">
+        <!-- Search Panel (hidden by default) -->
+        <div class="sidebar-panel hidden" id="searchPanel">
+          <div class="sidebar-header">
+            <span class="sidebar-title">SEARCH</span>
+          </div>
+          <div class="search-container">
+            <input type="text" id="searchInput" class="search-input" placeholder="Search files..." autocomplete="off" />
+            <div id="searchResults" class="search-results"></div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Content Area (editor + terminal) -->
+      <div class="content-area">
+        <!-- Editor Area -->
+        <div class="editor-area">
           <div id="tabsBar" class="tabs-bar"></div>
-          <div class="editor-shell" style="position: relative; display: flex; flex-direction: column; width: 100%; height: 100%;">
-            <div id="diffControlBar" class="diff-control-bar hidden" style="display: flex; align-items: center; justify-content: space-between; background: #151a26; border: 1px solid var(--line); border-radius: 8px; padding: 6px 14px; margin: 8px; box-shadow: 0 4px 18px rgba(0,0,0,0.35); z-index: 10;">
-              <span class="diff-title" style="font-weight: 700; font-size: 0.84rem; color: #fff;">⚡ Proposed Valkyrie Changes</span>
-              <div class="diff-actions" style="display: flex; gap: 8px;">
-                <button id="acceptDiffBtn" class="accent-btn" style="padding: 4px 10px; font-size: 0.78rem;">Accept & Commit</button>
-                <button id="rejectDiffBtn" class="secondary-btn" style="padding: 4px 10px; font-size: 0.78rem; background: transparent; border-color: rgba(255,255,255,0.15);">Reject</button>
+          
+          <div class="editor-shell">
+            <!-- Diff control bar (hidden until diffs shown) -->
+            <div id="diffControlBar" class="diff-control-bar hidden">
+              <span class="diff-title">⚡ Proposed Changes</span>
+              <div class="diff-actions">
+                <button id="acceptDiffBtn" class="accent-btn">✓ Accept Changes</button>
+                <button id="rejectDiffBtn" class="danger-btn">✗ Reject</button>
               </div>
             </div>
-            <div id="monacoEditorContainer" style="flex: 1; height: 100%; width: 100%;"></div>
-            <div id="diffViewerWrapper" class="hidden" style="flex: 1; height: 100%; width: 100%; display: flex; flex-direction: row; overflow: hidden;">
-              <div id="diffSidebar" style="width: 220px; background: #11111b; border-right: 1px solid var(--line); display: flex; flex-direction: column;">
-                <div style="padding: 10px; font-size: 0.8rem; font-weight: bold; border-bottom: 1px solid var(--line); color: #cdd6f4;">Modified Files</div>
-                <ul id="diffFileList" style="list-style: none; padding: 0; margin: 0; overflow-y: auto; font-size: 0.75rem;"></ul>
+            
+            <!-- Main Monaco Editor -->
+            <div id="monacoEditorContainer"></div>
+            
+            <!-- Diff Viewer (hidden until needed) -->
+            <div id="diffViewerWrapper" class="hidden">
+              <div id="diffSidebar" class="diff-sidebar">
+                <div class="diff-sidebar-header">Modified Files</div>
+                <ul id="diffFileList" class="diff-file-list"></ul>
               </div>
-              <div id="monacoDiffContainer" style="flex: 1; height: 100%; min-width: 0;"></div>
+              <div id="monacoDiffContainer" class="diff-editor-container"></div>
             </div>
           </div>
-          <div class="status-bar">
-            <span id="statusLanguage">plaintext</span>
-            <span id="statusCursor">Ln 1, Col 1</span>
-            <span id="statusEncoding">UTF-8</span>
+        </div>
+
+        <!-- Terminal Panel (hidden by default) -->
+        <section id="terminalPanel" class="terminal-panel hidden">
+          <div class="terminal-header">
+            <span>Terminal</span>
+            <button class="ghost-btn terminal-close-btn" id="terminalCloseBtn">✕</button>
           </div>
+          <div id="xtermTerminalContainer" class="terminal-container"></div>
         </section>
+      </div>
 
-        <aside class="panel panel-right">
-          <div class="panel-header">
-            <h2>AI Agent</h2>
-            <div class="agent-status">
-              <span id="agentStatusDot" class="status-dot"></span>
-              <span id="agentStatusText">Ready</span>
+      <!-- AI Chat Panel (right side) -->
+      <aside class="ai-panel" id="aiPanel">
+        <div class="ai-header">
+          <div class="ai-header-top">
+            <h2 class="ai-title">AI Agent</h2>
+            <div class="ai-status">
+              <span id="agentStatusDot" class="status-dot ready"></span>
+              <span id="agentStatusText" class="status-text">Ready</span>
             </div>
           </div>
 
+          <!-- Agent mode selector -->
+          <div class="agent-mode-row">
+            <select id="modelModeSelect" class="mode-select" title="Choose AI agent mode">
+              <option value="valkyrie">🚀 Valkyrie (Multi-Agent)</option>
+              <option value="deepseek">🧠 DeepSeek R1</option>
+              <option value="qwen">💻 Qwen Coder</option>
+              <option value="llama">🦙 Llama 3.3</option>
+            </select>
+          </div>
+
+          <!-- Agent badges -->
+          <div class="agent-badges">
+            <span class="agent-badge" data-role="planner" title="DeepSeek R1 - Planning">📝 Plan</span>
+            <span class="agent-badge" data-role="coder" title="Qwen Coder - Generation">💻 Code</span>
+            <span class="agent-badge" data-role="reviewer" title="Llama 3.3 - Review">🔍 Review</span>
+            <span class="agent-badge" data-role="fast" title="Fast mode">⚡ Fast</span>
+          </div>
+        </div>
+
+        <!-- Agent Controls (collapsible) -->
+        <details class="agent-controls-details">
+          <summary class="agent-controls-summary">Settings ⚙️</summary>
           <div class="agent-controls">
-            <label>
+            <label class="control-label">
               Provider
-              <select id="providerSelect">
-                <option value="pollinations">Pollinations (No Key)</option>
+              <select id="providerSelect" class="control-select">
+                <option value="pollinations">Pollinations (Free)</option>
                 <option value="openrouter">OpenRouter (Free Tier)</option>
               </select>
             </label>
-
-            <label>
+            <label class="control-label">
               Model
-              <select id="modelSelect"></select>
+              <select id="modelSelect" class="control-select"></select>
             </label>
-
-            <label>
+            <label class="control-label">
               Mode
-              <select id="modeSelect">
-                <option value="chat">Chat</option>
-                <option value="edit">Edit</option>
-                <option value="explain">Explain</option>
-                <option value="debug">Debug</option>
+              <select id="modeSelect" class="control-select">
+                <option value="chat">💬 Chat</option>
+                <option value="edit">✏️ Edit</option>
+                <option value="explain">📖 Explain</option>
+                <option value="debug">🐛 Debug</option>
               </select>
             </label>
-
-            <label id="openRouterKeyWrap" class="hidden">
-              OpenRouter API Key
-              <input id="openRouterKeyInput" type="password" placeholder="sk-or-..." autocomplete="off" />
+            <label class="control-label" id="openRouterKeyWrap">
+              OpenRouter Key
+              <input id="openRouterKeyInput" type="password" class="control-input" placeholder="sk-or-..." autocomplete="off" />
             </label>
-
-            <label id="groqKeyWrap" class="hidden">
-              Groq API Key (Llama 3.3)
-              <input id="groqKeyInput" type="password" placeholder="gsk_..." autocomplete="off" />
+            <label class="control-label hidden" id="groqKeyWrap">
+              Groq Key
+              <input id="groqKeyInput" type="password" class="control-input" placeholder="gsk_..." autocomplete="off" />
             </label>
-
             <p id="modelHint" class="hint-text"></p>
             <p class="context-label">
-              Context file:
-              <code id="contextFileLabel">No file selected</code>
+              Context: <code id="contextFileLabel">No file</code>
             </p>
           </div>
+        </details>
 
-          <div class="conversation-header">
+        <!-- Conversations -->
+        <details class="conversations-section-details">
+          <summary class="conversations-header-summary">
             <span>Conversations</span>
-            <button id="newConversationBtn" class="secondary-btn">+ New</button>
-          </div>
+            <button id="newConversationBtn" class="ghost-btn">+ New</button>
+          </summary>
           <div id="conversationList" class="conversation-list"></div>
+        </details>
 
-          <div id="chatMessages" class="chat-messages"></div>
+        <!-- Chat Messages -->
+        <div id="chatMessages" class="chat-messages"></div>
 
-          <div class="chat-composer">
-            <textarea id="agentInput" placeholder="Ask the agent to chat, edit, explain, or debug..."></textarea>
-            <div class="chat-actions">
-              <button id="sendAgentBtn" class="primary-btn">Send</button>
-              <button id="applyToFileBtn" class="accent-btn" disabled>Apply to file</button>
-            </div>
+        <!-- Chat Composer -->
+        <div class="chat-composer">
+          <textarea id="agentPromptInput" class="chat-textarea" placeholder="Ask Nova to chat, edit, explain, or debug... (⌘Enter)"></textarea>
+          <div class="chat-actions">
+            <button id="sendAgentPromptBtn" class="primary-btn">⚡ Send</button>
+            <button id="addContextBtn" class="secondary-btn" title="Add selection as context">+ Context</button>
+            <button id="applyToFileBtn" class="accent-btn" disabled title="Apply suggested code to file">Apply</button>
           </div>
-        </aside>
-      </main>
-
-      <section id="terminalPanel" class="terminal-panel hidden">
-        <div class="terminal-header">Nova Terminal (Workspace Helper)</div>
-        <div id="xtermTerminalContainer" style="flex: 1; overflow: hidden; padding: 6px; background: #0a0d13;"></div>
-      </section>
+        </div>
+      </aside>
     </div>
 
-    <div id="settingsModal" class="modal hidden">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h2>Settings</h2>
-          <button id="closeSettingsBtn" class="secondary-btn">×</button>
-        </div>
-        <div class="modal-body">
-          <label>
-            Editor Theme
-            <select id="themeSelect">
-              <option value="vs-dark">Dark (Default)</option>
-              <option value="vs-light">Light</option>
-              <option value="hc-black">High Contrast</option>
-            </select>
-          </label>
-          <label>
-            Editor Font Size
-            <select id="fontSizeSelect">
-              <option value="12">12px</option>
-              <option value="14" selected>14px (Default)</option>
-              <option value="16">16px</option>
-              <option value="18">18px</option>
-              <option value="20">20px</option>
-            </select>
-          </label>
-          <label>
-            Sidebar Panel Width
-            <select id="panelWidthSelect">
-              <option value="250">250px (Narrow)</option>
-              <option value="280" selected>280px (Default)</option>
-              <option value="320">320px (Wide)</option>
-              <option value="370">370px (Extra Wide)</option>
-            </select>
-          </label>
-        </div>
-        <div class="modal-footer">
-          <button id="saveSettingsBtn" class="primary-btn">Save Settings</button>
-        </div>
+    <!-- Status Bar -->
+    <footer class="status-bar">
+      <div class="status-left">
+        <span id="statusLanguage" class="status-item">Plain Text</span>
+        <span id="statusCursor" class="status-item">Ln 1, Col 1</span>
+        <span id="statusEncoding" class="status-item">UTF-8</span>
+      </div>
+      <div class="status-right">
+        <span id="sidebarAgentStatusDot" class="status-dot ready"></span>
+        <span id="sidebarAgentStatusText" class="status-item">Nova Ready</span>
+        <span id="activeFilesCount" class="status-item">📂 0 files</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Settings Modal -->
+  <div id="settingsModal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button id="closeSettingsBtn" class="ghost-btn">✕</button>
+      </div>
+      <div class="modal-body">
+        <label class="control-label">
+          Editor Theme
+          <select id="themeSelect" class="control-select">
+            <option value="vs-dark">Dark (Default)</option>
+            <option value="vs-light">Light</option>
+            <option value="hc-black">High Contrast</option>
+          </select>
+        </label>
+        <label class="control-label">
+          Font Size
+          <select id="fontSizeSelect" class="control-select">
+            <option value="12">12px</option>
+            <option value="14" selected>14px</option>
+            <option value="16">16px</option>
+            <option value="18">18px</option>
+          </select>
+        </label>
+        <label class="control-label">
+          Sidebar Width
+          <select id="panelWidthSelect" class="control-select">
+            <option value="200">Narrow (200px)</option>
+            <option value="240" selected>Default (240px)</option>
+            <option value="300">Wide (300px)</option>
+            <option value="360">Extra Wide (360px)</option>
+          </select>
+        </label>
+      </div>
+      <div class="modal-footer">
+        <button id="saveSettingsBtn" class="primary-btn">Save Settings</button>
       </div>
     </div>
+  </div>
 
-    <script src="./app.js"></script>
-  </body>
+  <!-- Load scripts IN ORDER: dependencies first, then app -->
+  <script src="./icons.js"></script>
+  <script src="./provider-detector.js"></script>
+  <script src="./diff-manager.js"></script>
+  <script src="./agent-panel-manager.js"></script>
+  <script src="./app.js"></script>
+</body>
 </html>

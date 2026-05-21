@@ -199,9 +199,19 @@ class DiffManager {
         }
       );
 
+      // Dispose existing models to avoid "Model already exists for Uri" error
+      const origUri = monaco.Uri.parse('file:///original');
+      const propUri = monaco.Uri.parse('file:///proposed');
+      
+      const existingOrig = monaco.editor.getModel(origUri);
+      if (existingOrig) existingOrig.dispose();
+      
+      const existingProp = monaco.editor.getModel(propUri);
+      if (existingProp) existingProp.dispose();
+
       // Create models for original and proposed code
-      const originalModel = monaco.editor.createModel(original, language, monaco.Uri.parse('file:///original'));
-      const proposedModel = monaco.editor.createModel(proposed, language, monaco.Uri.parse('file:///proposed'));
+      const originalModel = monaco.editor.createModel(original, language, origUri);
+      const proposedModel = monaco.editor.createModel(proposed, language, propUri);
 
       // Set models on diff editor
       this.state.diffEditor.setModel({
@@ -359,7 +369,9 @@ class DiffManager {
     }
 
     // Re-render tabs to show dirty indicator
-    if (window.renderTabs) {
+    if (typeof renderTabs === 'function') {
+      renderTabs();
+    } else if (window.renderTabs) {
       window.renderTabs();
     }
   }
@@ -430,18 +442,11 @@ class DiffManager {
   }
 }
 
-// Auto-initialize when Monaco is ready
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => {
-    // Wait for Monaco to load
-    setTimeout(() => {
-      if (!window.diffManager && typeof monaco !== 'undefined') {
-        window.diffManager = new DiffManager();
-      }
-    }, 1000);
-  });
-} else {
+window.DiffManager = DiffManager;
+
+// Clean initialization function exposed to app.js
+window.initDiffManager = function() {
   if (!window.diffManager && typeof monaco !== 'undefined') {
     window.diffManager = new DiffManager();
   }
-}
+};

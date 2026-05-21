@@ -66,5 +66,12 @@ contextBridge.exposeInMainWorld("novaAPI", {
       ipcRenderer.on(channel, listener);
       return () => ipcRenderer.removeListener(channel, listener);
     }
+  },
+
+  // Single-agent direct chat (Chat / Edit / Explain / Debug modes)
+  // Calls Pollinations by default (no key needed) or OpenRouter if a key is present.
+  agent: {
+    chat: (payload) => ipcRenderer.invoke("agent:chat", payload),
+    inlineEdit: (payload) => ipcRenderer.invoke("agent:inline-edit", payload)
   }
 });

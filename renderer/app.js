@@ -14,11 +14,41 @@ const MODEL_CONFIG = {
     openrouterModel: "mistralai/mistral-7b-instruct",
     pollinationsModel: "mistral"
   },
+  qwen: {
+    label: "Qwen 2.5 Coder 32B",
+    openrouterModel: "qwen/qwen-2.5-coder-32b-instruct:free",
+    pollinationsModel: "openai"
+  },
   deepseek: {
     label: "DeepSeek R1",
-    openrouterModel: "deepseek/deepseek-r1",
+    openrouterModel: "deepseek/deepseek-r1:free",
     pollinationsModel: "openai"
   }
+};
+
+const SINGLE_AGENT_MODELS = {
+  deepseek: {
+    label: "DeepSeek R1",
+    openrouterModel: "deepseek/deepseek-r1:free",
+    pollinationsModel: "openai"
+  },
+  qwen: {
+    label: "Qwen 2.5 Coder 32B",
+    openrouterModel: "qwen/qwen-2.5-coder-32b-instruct:free",
+    pollinationsModel: "openai"
+  },
+  llama: {
+    label: "Llama 3.3 70B",
+    openrouterModel: "meta-llama/llama-3.3-70b-instruct:free",
+    pollinationsModel: "openai"
+  }
+};
+
+const BADGE_ROLE_TO_MODEL_MODE = {
+  planner: "deepseek",
+  coder: "qwen",
+  reviewer: "llama",
+  fast: "qwen"
 };
 
 const LANGUAGE_BY_EXT = {
@@ -143,7 +173,15 @@ const els = {
   // OLD: Keep for compatibility
   agentInput: document.getElementById("agentInput"),
   sendAgentBtn: document.getElementById("sendAgentBtn"),
-  applyToFileBtn: document.getElementById("applyToFileBtn")
+  applyToFileBtn: document.getElementById("applyToFileBtn"),
+  
+  // NEW: Layout and Panels
+  activityBtns: document.querySelectorAll('.activity-btn[data-panel]'),
+  sidebar: document.getElementById('sidebar'),
+  explorerPanel: document.getElementById('explorerPanel'),
+  searchPanel: document.getElementById('searchPanel'),
+  aiPanel: document.getElementById('aiPanel'),
+  terminalCloseBtn: document.getElementById('terminalCloseBtn')
 };
 
 // Monaco AMD setup
@@ -156,6 +194,7 @@ init().catch((error) => {
 async function init() {
   renderModelOptions();
   bindEvents();
+  syncAgentModeUI();
   syncProviderUI();
 
   // Load API Keys from Environment Variables (fallback to LocalStorage)
@@ -218,6 +257,7 @@ async function init() {
     });
     window.novaAPI.valkyrie.onEvent("valkyrie:error", (data) => {
       updateActiveValkyrieCard('error', data.message);
+      addChatMessage("system", `❌ Valkyrie Engine: ${data.message}`);
     });
   }
 
@@ -271,6 +311,20 @@ function initMonaco() {
             const text = ed.getModel().getValueInRange(selection);
             triggerInlineReview(text, selection);
           }
+        }
+      });
+
+      // Add Inline Edit action
+      state.editor.addAction({
+        id: 'nova-inline-edit',
+        label: 'NOVA: Inline Edit (Cmd+K)',
+        keybindings: [
+          monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK
+        ],
+        contextMenuGroupId: 'navigation',
+        contextMenuOrder: 1.6,
+        run: function (ed) {
+          showInlineEditWidget(ed);
         }
       });
 
@@ -367,6 +421,8 @@ function bindEvents() {
   });
   els.modelModeSelect?.addEventListener("change", () => {
     state.selectedAgent = els.modelModeSelect.value;
+    syncAgentModeUI();
+    syncProviderUI();
     console.log(`🤖 Agent mode changed to: ${state.selectedAgent}`);
   });
 
@@ -388,6 +444,77 @@ function bindEvents() {
   if (els.toggleChatHistoryBtn) {
     els.toggleChatHistoryBtn.addEventListener("click", toggleChatHistory);
   }
+
+  // Activity Bar toggling
+  const activityBtns = document.querySelectorAll('.activity-btn[data-panel]');
+  activityBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const panel = btn.dataset.panel;
+      activityBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      
+      document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.add('hidden'));
+      
+      const sidebar = document.getElementById('sidebar');
+      if (panel === 'explorer') {
+        document.getElementById('explorerPanel')?.classList.remove('hidden');
+        sidebar?.classList.remove('collapsed');
+      } else if (panel === 'search') {
+        document.getElementById('searchPanel')?.classList.remove('hidden');
+        sidebar?.classList.remove('collapsed');
+      } else if (panel === 'ai') {
+        const aiPanel = document.getElementById('aiPanel');
+        aiPanel?.classList.toggle('hidden');
+      }
+    });
+  });
+
+  // Search Panel Input Event Binding
+  const searchInput = document.getElementById("searchInput");
+  const searchResults = document.getElementById("searchResults");
+  if (searchInput && searchResults) {
+    searchInput.addEventListener("input", () => {
+      const query = searchInput.value.trim();
+      searchResults.innerHTML = "";
+      if (!query) return;
+      
+      const matchedFiles = searchWorkspaceTree(query);
+      if (matchedFiles.length === 0) {
+        const noResults = document.createElement("div");
+        noResults.className = "tab-empty";
+        noResults.style.cssText = "padding: 12px; color: var(--text-muted); font-size: var(--font-size-xs);";
+        noResults.textContent = "No matching files found.";
+        searchResults.appendChild(noResults);
+        return;
+      }
+      
+      matchedFiles.forEach(file => {
+        const item = document.createElement("div");
+        item.className = "search-result-item";
+        
+        const fileLabel = document.createElement("div");
+        fileLabel.className = "result-file";
+        fileLabel.innerHTML = `<span style="font-size: 14px;">${getNodeIcon(file)}</span> <span>${file.name}</span>`;
+        
+        const fileMatch = document.createElement("div");
+        fileMatch.className = "result-match";
+        fileMatch.textContent = file.path;
+        
+        item.append(fileLabel, fileMatch);
+        item.addEventListener("click", () => {
+          openFile(file.path);
+        });
+        
+        searchResults.appendChild(item);
+      });
+    });
+  }
+
+  // Terminal Close Button
+  document.getElementById('terminalCloseBtn')?.addEventListener('click', () => {
+    state.terminalVisible = false;
+    els.terminalPanel.classList.add('hidden');
+  });
   
   // Agent badge selection
   els.agentBadges?.forEach(badge => {
@@ -414,7 +541,10 @@ function bindEvents() {
   }
 
   if (els.newConversationBtn) {
-    els.newConversationBtn.addEventListener("click", createNewConversation);
+    els.newConversationBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      createNewConversation();
+    });
   }
   els.settingsBtn.addEventListener("click", () => {
     els.settingsModal.classList.remove("hidden");
@@ -463,9 +593,14 @@ function bindEvents() {
         if (activeTab) {
           activeTab.content = file.proposedContent;
           activeTab.dirty = false;
+          if (state.activePath === file.filePath) {
+            setEditorContent(file.proposedContent, file.filePath);
+          }
         }
       }
       renderTabs();
+      state.pendingApplyContent = "";
+      updateApplyButtonState();
       hideDiffEditor();
       addChatMessage("system", "✅ Proposed changes accepted and committed to disk.");
     } catch (err) {
@@ -483,7 +618,7 @@ function bindEvents() {
  * Add selected text from editor to prompt
  */
 function addContextToPrompt() {
-  const selection = state.editor?.getSelectedText?.();
+  const selection = getSelectedEditorText();
   if (selection && els.agentPromptInput) {
     const currentPrompt = els.agentPromptInput.value;
     const separator = currentPrompt ? '\n\n' : '';
@@ -492,6 +627,18 @@ function addContextToPrompt() {
     els.agentPromptInput.focus();
     console.log('✅ Context added to prompt');
   }
+}
+
+function getSelectedEditorText() {
+  if (!state.editor) {
+    return "";
+  }
+  const selection = state.editor.getSelection();
+  if (!selection || selection.isEmpty()) {
+    return "";
+  }
+  const model = state.editor.getModel();
+  return model ? model.getValueInRange(selection) : "";
 }
 
 /**
@@ -506,16 +653,22 @@ function toggleChatHistory() {
  * Select agent role
  */
 function selectAgentRole(role) {
-  state.selectedAgent = role;
-  console.log(`🎯 Selected agent: ${role}`);
-  
-  // Update badge UI
-  els.agentBadges?.forEach(badge => {
-    if (badge.dataset.role === role) {
-      badge.classList.add('active');
-    } else {
-      badge.classList.remove('active');
-    }
+  const mappedMode = BADGE_ROLE_TO_MODEL_MODE[role] || role;
+  state.selectedAgent = mappedMode;
+  syncAgentModeUI();
+  syncProviderUI();
+  console.log(`🎯 Selected agent role: ${role} -> ${mappedMode}`);
+}
+
+function syncAgentModeUI() {
+  if (els.modelModeSelect && els.modelModeSelect.value !== state.selectedAgent) {
+    els.modelModeSelect.value = state.selectedAgent;
+  }
+  els.agentBadges?.forEach((badge) => {
+    const badgeMode = BADGE_ROLE_TO_MODEL_MODE[badge.dataset.role];
+    const shouldBeActive = state.selectedAgent !== "valkyrie" && badgeMode === state.selectedAgent;
+    badge.classList.toggle("active", shouldBeActive);
+    badge.classList.toggle("inactive", !shouldBeActive);
   });
 }
 
@@ -528,6 +681,25 @@ function compareNodes(a, b) {
     return a.type === "folder" ? -1 : 1;
   }
   return a.name.localeCompare(b.name);
+}
+
+function searchWorkspaceTree(query) {
+  const results = [];
+  if (!state.tree) return results;
+  
+  function traverse(node) {
+    if (node.type === "file" && node.name.toLowerCase().includes(query.toLowerCase())) {
+      results.push(node);
+    }
+    if (node.children && Array.isArray(node.children)) {
+      node.children.forEach(traverse);
+    }
+  }
+  
+  if (state.tree.children) {
+    state.tree.children.forEach(traverse);
+  }
+  return results;
 }
 
 async function handleSelectWorkspace() {
@@ -598,23 +770,30 @@ function renderTreeNode(node, depth) {
   row.style.paddingLeft = `${8 + depth * 14}px`;
 
   const caret = document.createElement("span");
-  caret.className = "caret";
+  caret.className = "tree-caret";
   if (node.type === "folder") {
-    caret.textContent = state.expandedFolders.has(node.path) ? "▾" : "▸";
+    caret.textContent = "▸";
+    if (state.expandedFolders.has(node.path)) {
+      caret.classList.add("expanded");
+    }
   } else {
     caret.textContent = " ";
+    caret.classList.add("empty");
   }
 
   const icon = document.createElement("span");
-  icon.className = "icon";
+  icon.className = "tree-icon";
   icon.textContent = getNodeIcon(node);
 
   const name = document.createElement("span");
-  name.className = "name";
+  name.className = "tree-label";
+  if (node.type === "folder") {
+    name.classList.add("folder-name");
+  }
   name.textContent = node.name;
 
   if (node.path === state.activePath) {
-    row.classList.add("active-file");
+    row.classList.add("active");
   }
   if (node.path === state.selectedPath) {
     row.classList.add("selected");
@@ -672,6 +851,7 @@ function getLanguageForPath(filePath = "") {
 }
 
 function renderTabs() {
+  window.renderTabs = renderTabs;
   els.tabsBar.innerHTML = "";
   if (state.tabs.length === 0) {
     const empty = document.createElement("div");
@@ -1070,7 +1250,8 @@ async function loadConversationMessages(conversationId) {
     const messages = await window.novaAPI.chat.getMessages(conversationId);
     state.chatMessages = messages.map(msg => ({
       role: msg.role,
-      content: msg.content
+      content: msg.content,
+      timestamp: msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ""
     }));
     state.apiMessages = messages.map(msg => ({
       role: msg.role,
@@ -1112,39 +1293,173 @@ async function switchConversation(conversationId) {
   }
 }
 
+/**
+ * Smart auto-scroll for chat message area.
+ * It checks if the user is already scrolled near the bottom,
+ * and if so, schedules a scroll to the bottom after layout reflow.
+ * If activeValkyrieCard is active, uses a larger threshold (350px) to handle expanding components.
+ */
+function scrollChatToBottom(force = false) {
+  const container = els.chatMessages;
+  if (!container) return;
+  
+  const threshold = activeValkyrieCard ? 350 : 150;
+  const isNearBottom = force || (container.scrollHeight - container.clientHeight - container.scrollTop < threshold);
+  
+  if (isNearBottom) {
+    setTimeout(() => {
+      container.scrollTop = container.scrollHeight;
+    }, 30);
+    // Also schedule another scroll at 250ms to perfectly account for CSS max-height transitions (which take 200ms)
+    setTimeout(() => {
+      container.scrollTop = container.scrollHeight;
+    }, 250);
+  }
+}
+
+/**
+ * Smart auto-scroll for nested scrollable containers (e.g. thought-content, diff-content)
+ * only if the user is already scrolled near the bottom of that element, or if forced.
+ */
+function scrollElementToBottom(element, force = false) {
+  if (!element) return;
+  const isNearBottom = force || (element.scrollHeight - element.clientHeight - element.scrollTop < 40);
+  if (isNearBottom) {
+    element.scrollTop = element.scrollHeight;
+  }
+}
+
 function addChatMessage(role, content) {
-  state.chatMessages.push({ role, content });
+  const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  state.chatMessages.push({ role, content, timestamp });
   renderChatMessages();
 }
 
 function renderChatMessages() {
   els.chatMessages.innerHTML = "";
   for (const message of state.chatMessages) {
+    const chatMsg = document.createElement("div");
+    chatMsg.className = `chat-message ${message.role}`;
+
     const bubble = document.createElement("div");
-    bubble.className = `message ${message.role}`;
-    bubble.textContent = message.content;
-    els.chatMessages.appendChild(bubble);
+    bubble.className = "message-bubble";
+    bubble.innerHTML = formatMessageContent(message.content);
+
+    chatMsg.appendChild(bubble);
+
+    if (message.timestamp) {
+      const timeSpan = document.createElement("span");
+      timeSpan.className = "message-timestamp";
+      timeSpan.textContent = message.timestamp;
+      chatMsg.appendChild(timeSpan);
+    }
+
+    els.chatMessages.appendChild(chatMsg);
   }
-  els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+  scrollChatToBottom(true);
+}
+
+window.copyCodeBlock = (btn, encodedCode) => {
+  const code = decodeURIComponent(encodedCode);
+  navigator.clipboard.writeText(code).then(() => {
+    btn.innerHTML = `<svg style="width: 14px; height: 14px; margin-right: 4px; display: inline-block; vertical-align: middle;" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>Copied!`;
+    btn.classList.add("copied");
+    setTimeout(() => {
+      btn.innerHTML = `<svg style="width: 14px; height: 14px; margin-right: 4px; display: inline-block; vertical-align: middle;" viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" /><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" /></svg>Copy`;
+      btn.classList.remove("copied");
+    }, 2000);
+  });
+};
+
+function formatMessageContent(content) {
+  if (!content) return "";
+  
+  let escaped = content
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+    
+  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+  escaped = escaped.replace(codeBlockRegex, (match, lang, code) => {
+    const encoded = encodeURIComponent(code.trim());
+    const displayLang = lang ? lang.toLowerCase() : "code";
+    return `<div class="code-container">
+  <div class="code-header">
+    <span class="code-lang">${displayLang}</span>
+    <button class="copy-code-btn" onclick="window.copyCodeBlock(this, '${encoded}')"><svg style="width: 14px; height: 14px; margin-right: 4px; display: inline-block; vertical-align: middle;" viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" /><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" /></svg>Copy</button>
+  </div>
+  <pre><code class="language-${displayLang}">${code.trim()}</code></pre>
+</div>`;
+  });
+  
+  const customCodeBlockRegex = /&lt;nova-code&gt;([\s\S]*?)&lt;\/nova-code&gt;/g;
+  escaped = escaped.replace(customCodeBlockRegex, (match, code) => {
+    const encoded = encodeURIComponent(code.trim());
+    return `<div class="code-container">
+  <div class="code-header">
+    <span class="code-lang">code</span>
+    <button class="copy-code-btn" onclick="window.copyCodeBlock(this, '${encoded}')"><svg style="width: 14px; height: 14px; margin-right: 4px; display: inline-block; vertical-align: middle;" viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" /><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" /></svg>Copy</button>
+  </div>
+  <pre><code>${code.trim()}</code></pre>
+</div>`;
+  });
+
+  escaped = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
+  escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  
+  const lines = escaped.split('\n');
+  let inList = false;
+  const processedLines = [];
+  
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+    
+    if (line.includes('<pre>') || line.includes('</pre>') || line.includes('<code>') || line.includes('</code>')) {
+      processedLines.push(line);
+      continue;
+    }
+    
+    const listMatch = line.match(/^(\s*)[-*]\s+(.*)$/);
+    if (listMatch) {
+      if (!inList) {
+        processedLines.push('<ul>');
+        inList = true;
+      }
+      processedLines.push(`<li>${listMatch[2]}</li>`);
+    } else {
+      if (inList) {
+        processedLines.push('</ul>');
+        inList = false;
+      }
+      processedLines.push(line);
+    }
+  }
+  if (inList) {
+    processedLines.push('</ul>');
+  }
+  
+  let finalHtml = processedLines.join('\n');
+  
+  const parts = finalHtml.split(/(<\/pre>|<pre>)/g);
+  let isInsidePre = false;
+  for (let k = 0; k < parts.length; k++) {
+    if (parts[k] === '<pre>') {
+      isInsidePre = true;
+    } else if (parts[k] === '</pre>') {
+      isInsidePre = false;
+    } else if (!isInsidePre) {
+      parts[k] = parts[k].replace(/\n/g, '<br>');
+    }
+  }
+  
+  return parts.join('');
 }
 
 function setAgentBusy(isBusy) {
   els.agentStatusDot.classList.toggle("busy", isBusy);
   els.agentStatusText.textContent = isBusy ? "Thinking..." : "Ready";
-  els.sendAgentBtn.disabled = isBusy;
-}
-
-function buildModeInstruction() {
-  switch (state.mode) {
-    case "edit":
-      return "You are in EDIT mode. Return the full updated content of the file in one fenced code block.";
-    case "explain":
-      return "You are in EXPLAIN mode. Explain the code and the reasoning clearly.";
-    case "debug":
-      return "You are in DEBUG mode. Identify likely bugs and provide corrected code if needed.";
-    default:
-      return "You are in CHAT mode. Provide concise coding help and suggestions.";
-  }
+  if (els.sendAgentBtn) els.sendAgentBtn.disabled = isBusy;
+  if (els.sendAgentPromptBtn) els.sendAgentPromptBtn.disabled = isBusy;
 }
 
 function buildFileTreeContext() {
@@ -1175,56 +1490,6 @@ function buildFileTreeContext() {
     ...files.slice(0, 50),
     files.length > 50 ? `... and ${files.length - 50} more files` : ""
   ].join("\n");
-}
-
-function buildCurrentFileContext() {
-  const activeTab = getActiveTab();
-  if (!activeTab) {
-    return "No file is currently open.";
-  }
-
-  const language = getLanguageForPath(activeTab.path);
-  const cursor = getCursorPosition();
-  const selection = state.editor ? state.editor.getSelection() : null;
-  let selectedText = "";
-
-  if (selection && !selection.isEmpty()) {
-    selectedText = state.editor.getModel().getValueInRange(selection);
-  }
-
-  const content = (activeTab.content && activeTab.content.length > 12000)
-    ? `${activeTab.content.slice(0, 12000)}\n...[truncated]`
-    : (activeTab.content || "");
-
-  const contextParts = [
-    buildFileTreeContext(),
-    "",
-    `Current file: ${activeTab.path}`,
-    `Language: ${language}`,
-    `Cursor position: Line ${cursor.line}, Column ${cursor.column}`
-  ];
-
-  if (selectedText) {
-    contextParts.push(
-      "Selected text:",
-      "```",
-      selectedText,
-      "```"
-    );
-  }
-
-  contextParts.push(
-    "File content:",
-    `\`\`\`${language}`,
-    content,
-    "```"
-  );
-
-  return contextParts.join("\n");
-}
-
-function buildSystemPrompt() {
-  return "You are Nova IDE's coding agent. Be precise, practical, and produce production-quality code changes.";
 }
 
 async function handleSendToAgent() {
@@ -1299,12 +1564,15 @@ async function handleSendToAgent() {
 async function handleValkyrieExecution(prompt) {
   console.log("📝 Valkyrie multi-agent mode");
 
-  createValkyrieCard(prompt);
+  const orKey = els.openRouterKeyInput?.value.trim() || "";
+  if (!orKey) {
+    addChatMessage("system", "ℹ️ No OpenRouter key detected — Running Valkyrie multi-agent harness using free Pollinations fallback...");
+  }
 
   const activeTab = getActiveTab();
   const activeFilePath = activeTab ? activeTab.path : null;
 
-  // Store original state for rollback
+  createValkyrieCard(prompt);
   valkyrieSession.activeFilePath = activeFilePath;
   valkyrieSession.originalContent = activeTab ? activeTab.content : "";
 
@@ -1314,32 +1582,13 @@ async function handleValkyrieExecution(prompt) {
   };
 
   try {
-    // Step 1: PLANNING PHASE
-    updateAgentStatus('active', '📝 Planning...');
-    updateActiveValkyrieCard('planning', 'DeepSeek R1 is thinking through the task...');
-
-    // Step 2: CODING PHASE
-    updateAgentStatus('active', '💻 Coding...');
-    updateActiveValkyrieCard('coding', 'Qwen3-Coder is generating code changes...');
-
-    // Step 3: REVIEW PHASE
-    updateAgentStatus('active', '🧐 Reviewing...');
-    updateActiveValkyrieCard('review', 'Llama 3.3 is validating changes...');
-
-    // Step 4: Apply diffs in real-time
-    let results = null;
-    try {
-      results = await window.novaAPI.valkyrie.execute(
-        state.currentConversationId,
-        prompt,
-        activeFilePath,
-        apiKeys
-      );
-    } catch (invokeErr) {
-      // If backend isn't available, fall back to a local simulation so UI is responsive
-      console.warn('Valkyrie execute failed, using local simulation:', invokeErr);
-      results = await simulateValkyrieFallback(prompt, activeFilePath);
-    }
+    // Apply diffs in real-time
+    const results = await window.novaAPI.valkyrie.execute(
+      state.currentConversationId,
+      prompt,
+      activeFilePath,
+      apiKeys
+    );
 
     if (results && results.length > 0) {
       // Show diffs
@@ -1391,21 +1640,32 @@ async function handleSingleAgentExecution(prompt, agent) {
     const activeFilePath = activeTab ? activeTab.path : null;
     const activeFileContent = activeTab ? activeTab.content : "";
 
-    // Call single agent API
+    // Call single agent API (Pollinations free by default, OpenRouter if key present)
     const response = await window.novaAPI.agent.chat({
       agent,
       prompt,
       filePath: activeFilePath,
       fileContent: activeFileContent,
-      apiKeys
+      apiKeys,
+      mode: els.modeSelect?.value || "chat"
     });
 
-    // Show response in chat
-    addChatMessage("assistant", response.text);
+    // Show response text in chat
+    if (response.text) addChatMessage("assistant", response.text);
 
-    // If there are code changes, show diffs
-    if (response.diffs && Object.keys(response.diffs).length > 0) {
-      showDiffsInEditor(response.diffs);
+    // If a code block was returned, store it for Apply and show diffs
+    if (response.code) {
+      state.pendingApplyContent = response.code;
+      updateApplyButtonState();
+      // Build diff result for Monaco diff viewer
+      const diffResults = [{
+        filePath: activeFilePath || "untitled",
+        originalContent: activeFileContent || "",
+        proposedContent: response.code,
+        task: { description: "Agent suggested changes" }
+      }];
+      showDiffsInEditor(diffResults);
+      addChatMessage("system", "💡 Code ready — click Apply to file or Accept Changes in the editor.");
     }
 
     if (state.currentConversationId) {
@@ -1449,7 +1709,7 @@ async function simulateValkyrieFallback(prompt, filePath) {
 
   // Create a simple mock diff result
   const file = filePath || 'example.js';
-  const original = (getOpenFileContent && getOpenFileContent(file)) || '// original file content\nfunction hello() {\n  console.log("hi");\n}\n';
+  const original = (state.tabs.find(t => t.path === file)?.content) || '// original file content\nfunction hello() {\n  console.log("hi");\n}\n';
   const proposed = original.replace('console.log("hi");', 'console.log("hello world");');
 
   return [{
@@ -1484,6 +1744,10 @@ function showDiffsInEditor(results) {
 
   if (!results || results.length === 0) return;
 
+  if (!window.diffManager && typeof window.initDiffManager === 'function') {
+    window.initDiffManager();
+  }
+
   // Use the DiffManager if available
   if (window.diffManager) {
     const filesWithDiffs = {};
@@ -1513,19 +1777,25 @@ function showDiffsInEditor(results) {
  * Update agent status indicator
  */
 function updateAgentStatus(status, text) {
+  // Update sticky top-bar status
   if (els.agentStatusDot) {
     els.agentStatusDot.className = `status-dot ${status}`;
   }
   if (els.agentStatusText) {
     els.agentStatusText.textContent = text;
   }
+  // Also update sidebar status (different IDs to avoid duplicate-ID bug)
+  const sidebarDot = document.getElementById("sidebarAgentStatusDot");
+  const sidebarTxt = document.getElementById("sidebarAgentStatusText");
+  if (sidebarDot) sidebarDot.className = `status-dot ${status}`;
+  if (sidebarTxt) sidebarTxt.textContent = text;
 }
 
 
 async function callPollinations(messages) {
   // Anonymous pollinations text API only supports 'openai-fast' (aliased as 'openai')
   const model = "openai"; 
-  const response = await fetch("https://text.pollinations.ai/", {
+  const response = await fetch("https://text.pollinations.ai/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -1533,7 +1803,8 @@ async function callPollinations(messages) {
     body: JSON.stringify({
       messages,
       model,
-      seed: 42
+      seed: 42,
+      private: true
     })
   });
 
@@ -1541,8 +1812,13 @@ async function callPollinations(messages) {
     throw new Error(`Pollinations error (${response.status})`);
   }
 
-  const text = await response.text();
-  return text.trim();
+  const resText = await response.text();
+  try {
+    const data = JSON.parse(resText);
+    return (data?.choices?.[0]?.message?.content || resText).trim();
+  } catch (e) {
+    return resText.trim();
+  }
 }
 
 async function callOpenRouter(messages) {
@@ -1711,7 +1987,7 @@ function applyFontSize(fontSize) {
 
 function applyPanelWidth(panelWidth) {
   const width = parseInt(panelWidth);
-  document.querySelector(".ide-grid").style.gridTemplateColumns = `${width}px 1fr ${width}px`;
+  document.documentElement.style.setProperty('--sidebar-width', `${width}px`);
 }
 
 // --- Valkyrie Agent Harness UI Management ---
@@ -1731,17 +2007,38 @@ function createValkyrieCard(userPrompt) {
       <span>Valkyrie Engine</span>
       <button class="abort-btn">Abort</button>
     </div>
-    <div class="valkyrie-thought-section closed">
-      <div class="thought-title">▶ Thought Logs (DeepSeek R1)</div>
+    <div class="valkyrie-thought-section">
+      <div class="thought-header-row" style="display: flex; justify-content: space-between; align-items: center; user-select: none;">
+        <div class="thought-title" style="flex: 1; padding: 8px 12px; font-size: var(--font-size-sm); font-weight: 500; color: var(--text-secondary); background: var(--bg-base); cursor: pointer; display: flex; align-items: center; gap: 6px; transition: background var(--transition-fast);">▼ Thought Logs (DeepSeek R1)</div>
+        <div class="thought-controls" style="display: flex; gap: 8px; font-size: 0.72rem; align-items: center; background: var(--bg-base); padding: 8px 12px 8px 0;">
+          <button class="thought-expand-btn" style="display: block; background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 6px; font-family: var(--font-ui); font-size: 0.72rem; border-radius: var(--radius-sm); border: 1px solid var(--border);">↕ Expand</button>
+        </div>
+      </div>
       <div class="thought-content"></div>
     </div>
     <div class="valkyrie-plan-section hidden">
-      <div class="section-title">📋 Execution Plan</div>
-      <ul class="plan-list"></ul>
+      <div class="plan-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; user-select: none;">
+        <span class="section-title" style="margin: 0; cursor: pointer;">📋 Execution Plan</span>
+        <div class="plan-controls" style="display: flex; gap: 8px; font-size: 0.72rem; align-items: center;">
+          <button class="plan-expand-btn" style="background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 6px; font-family: var(--font-ui); font-size: 0.72rem; border-radius: var(--radius-sm); border: 1px solid var(--border);">↕ Expand</button>
+          <span class="plan-collapse-arrow" style="cursor: pointer; color: var(--text-muted); font-size: 0.75rem;">▼</span>
+        </div>
+      </div>
+      <div class="plan-list-wrapper">
+        <ul class="plan-list"></ul>
+      </div>
     </div>
     <div class="valkyrie-diff-section hidden">
-      <div class="section-title">🔍 Surgical Diffs</div>
-      <div class="diff-content"></div>
+      <div class="diff-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; user-select: none;">
+        <span class="section-title" style="margin: 0; cursor: pointer;">🔍 Surgical Diffs</span>
+        <div class="diff-controls" style="display: flex; gap: 8px; font-size: 0.72rem; align-items: center;">
+          <button class="diff-expand-btn" style="background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 6px; font-family: var(--font-ui); font-size: 0.72rem; border-radius: var(--radius-sm); border: 1px solid var(--border);">↕ Expand</button>
+          <span class="diff-collapse-arrow" style="cursor: pointer; color: var(--text-muted); font-size: 0.75rem;">▼</span>
+        </div>
+      </div>
+      <div class="diff-content-wrapper">
+        <div class="diff-content"></div>
+      </div>
     </div>
     <div class="valkyrie-status-bar">
       <span class="status-dot pulsing"></span>
@@ -1752,9 +2049,78 @@ function createValkyrieCard(userPrompt) {
   // Thought toggle
   const thoughtTitle = card.querySelector(".thought-title");
   const thoughtSection = card.querySelector(".valkyrie-thought-section");
-  thoughtTitle.addEventListener("click", () => {
+  const thoughtExpandBtn = card.querySelector(".thought-expand-btn");
+  
+  const toggleThoughtCollapse = () => {
     const isClosed = thoughtSection.classList.toggle("closed");
     thoughtTitle.textContent = isClosed ? "▶ Thought Logs (DeepSeek R1)" : "▼ Thought Logs (DeepSeek R1)";
+    if (thoughtExpandBtn) {
+      thoughtExpandBtn.style.display = isClosed ? "none" : "block";
+    }
+    scrollChatToBottom(true);
+  };
+  
+  thoughtTitle.addEventListener("click", toggleThoughtCollapse);
+  
+  if (thoughtExpandBtn) {
+    thoughtExpandBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isExpanded = thoughtSection.classList.toggle("expanded");
+      thoughtExpandBtn.textContent = isExpanded ? "↕ Shrink" : "↕ Expand";
+      scrollChatToBottom(true);
+    });
+  }
+
+  // Plan section controls
+  const planSection = card.querySelector(".valkyrie-plan-section");
+  const planTitle = card.querySelector(".plan-header-row .section-title");
+  const planCollapseArrow = card.querySelector(".plan-collapse-arrow");
+  const planExpandBtn = card.querySelector(".plan-expand-btn");
+  
+  const togglePlanCollapse = () => {
+    const isCollapsed = planSection.classList.toggle("collapsed");
+    planCollapseArrow.textContent = isCollapsed ? "▶" : "▼";
+    if (isCollapsed) {
+      planExpandBtn.style.display = "none";
+    } else {
+      planExpandBtn.style.display = "block";
+    }
+    scrollChatToBottom(true);
+  };
+  
+  planTitle.addEventListener("click", togglePlanCollapse);
+  planCollapseArrow.addEventListener("click", togglePlanCollapse);
+  
+  planExpandBtn.addEventListener("click", () => {
+    const isExpanded = planSection.classList.toggle("expanded");
+    planExpandBtn.textContent = isExpanded ? "↕ Shrink" : "↕ Expand";
+    scrollChatToBottom(true);
+  });
+
+  // Diff section controls
+  const diffSection = card.querySelector(".valkyrie-diff-section");
+  const diffTitle = card.querySelector(".diff-header-row .section-title");
+  const diffCollapseArrow = card.querySelector(".diff-collapse-arrow");
+  const diffExpandBtn = card.querySelector(".diff-expand-btn");
+  
+  const toggleDiffCollapse = () => {
+    const isCollapsed = diffSection.classList.toggle("collapsed");
+    diffCollapseArrow.textContent = isCollapsed ? "▶" : "▼";
+    if (isCollapsed) {
+      diffExpandBtn.style.display = "none";
+    } else {
+      diffExpandBtn.style.display = "block";
+    }
+    scrollChatToBottom(true);
+  };
+  
+  diffTitle.addEventListener("click", toggleDiffCollapse);
+  diffCollapseArrow.addEventListener("click", toggleDiffCollapse);
+  
+  diffExpandBtn.addEventListener("click", () => {
+    const isExpanded = diffSection.classList.toggle("expanded");
+    diffExpandBtn.textContent = isExpanded ? "↕ Shrink" : "↕ Expand";
+    scrollChatToBottom(true);
   });
   
   // Abort button
@@ -1765,8 +2131,23 @@ function createValkyrieCard(userPrompt) {
     await window.novaAPI.valkyrie.abort();
   });
   
+  // Dynamic Transition-End Layout Adjustments to ensure smooth parent scrolling
+  const thoughtContentEl = thoughtSection.querySelector(".thought-content");
+  const planListWrapperEl = planSection.querySelector(".plan-list-wrapper");
+  const diffContentEl = diffSection.querySelector(".diff-content");
+  
+  if (thoughtContentEl) {
+    thoughtContentEl.addEventListener("transitionend", () => scrollChatToBottom(true));
+  }
+  if (planListWrapperEl) {
+    planListWrapperEl.addEventListener("transitionend", () => scrollChatToBottom(true));
+  }
+  if (diffContentEl) {
+    diffContentEl.addEventListener("transitionend", () => scrollChatToBottom(true));
+  }
+  
   els.chatMessages.appendChild(card);
-  els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+  scrollChatToBottom(true);
   
   activeValkyrieCard = card;
 }
@@ -1779,20 +2160,36 @@ function updateActiveValkyrieCard(type, data) {
     const thoughtContent = activeValkyrieCard.querySelector(".thought-content");
     
     // Automatically open thought section if it's the first chunk
-    if (thoughtSection.classList.contains("closed") && valkyrieThoughtBuffer === "") {
+    const isFirstThoughtChunk = valkyrieThoughtBuffer === "";
+    if (thoughtSection.classList.contains("closed") && isFirstThoughtChunk) {
       thoughtSection.classList.remove("closed");
       activeValkyrieCard.querySelector(".thought-title").textContent = "▼ Thought Logs (DeepSeek R1)";
+      const thoughtExpandBtn = activeValkyrieCard.querySelector(".thought-expand-btn");
+      if (thoughtExpandBtn) {
+        thoughtExpandBtn.style.display = "block";
+      }
+      // Force scroll parent chat so the newly opened thought section is visible
+      scrollChatToBottom(true);
     }
     
     valkyrieThoughtBuffer += data;
     thoughtContent.textContent = valkyrieThoughtBuffer;
-    thoughtContent.scrollTop = thoughtContent.scrollHeight;
+    // Smart nested scroll inside the thought log container
+    scrollElementToBottom(thoughtContent, isFirstThoughtChunk);
+    
+    // Smoothly scroll the parent chat messages container down to track the growing card
+    scrollChatToBottom(false);
   }
   
   else if (type === 'plan') {
     const planSection = activeValkyrieCard.querySelector(".valkyrie-plan-section");
     const planList = activeValkyrieCard.querySelector(".plan-list");
-    planSection.classList.remove("hidden");
+    const isFirstTimePlanShown = planSection.classList.contains("hidden");
+    if (isFirstTimePlanShown) {
+      planSection.classList.remove("hidden");
+      // Force scroll parent chat so the execution plan is brought into full view
+      scrollChatToBottom(true);
+    }
     planList.innerHTML = "";
     
     for (const task of data) {
@@ -1808,6 +2205,8 @@ function updateActiveValkyrieCard(type, data) {
       li.innerHTML = `<span class="status-icon">${icon}</span> <span>${task.description} <code style="font-size:0.7rem; opacity:0.7">(${task.assignedFile})</code></span>`;
       planList.appendChild(li);
     }
+    // Automatically keep the user scrolling down as plan is formed
+    scrollChatToBottom(false);
   }
   
   else if (type === 'task') {
@@ -1823,16 +2222,28 @@ function updateActiveValkyrieCard(type, data) {
         iconSpan.textContent = icon;
       }
     }
+    // Scroll chat to keep up with active task updates
+    scrollChatToBottom(false);
   }
   
   else if (type === 'diff') {
     const diffSection = activeValkyrieCard.querySelector(".valkyrie-diff-section");
     const diffContent = activeValkyrieCard.querySelector(".diff-content");
-    diffSection.classList.remove("hidden");
+    const isFirstTimeDiffShown = diffSection.classList.contains("hidden");
+    if (isFirstTimeDiffShown) {
+      diffSection.classList.remove("hidden");
+      // Force scroll parent chat so the diff section is brought into full view
+      scrollChatToBottom(true);
+    }
     
+    const isFirstDiffChunk = valkyrieDiffBuffer === "";
     valkyrieDiffBuffer += data;
     diffContent.textContent = valkyrieDiffBuffer;
-    diffContent.scrollTop = diffContent.scrollHeight;
+    // Smart nested scroll inside the diff log container
+    scrollElementToBottom(diffContent, isFirstDiffChunk);
+    
+    // Automatically keep the user scrolling down as diff streams in
+    scrollChatToBottom(false);
   }
   
   else if (type === 'review') {
@@ -1851,11 +2262,15 @@ function updateActiveValkyrieCard(type, data) {
         item.appendChild(feedbackDiv);
       }
     }
+    // Scroll chat to keep up with reviews
+    scrollChatToBottom(false);
   }
   
   else if (type === 'status') {
     const statusBarText = activeValkyrieCard.querySelector(".status-text");
     statusBarText.textContent = data;
+    // Scroll chat to keep up with status updates
+    scrollChatToBottom(false);
   }
   
   else if (type === 'error') {
@@ -1872,6 +2287,10 @@ function updateActiveValkyrieCard(type, data) {
     // Close the thought logs to save vertical space
     activeValkyrieCard.querySelector(".valkyrie-thought-section").classList.add("closed");
     activeValkyrieCard.querySelector(".thought-title").textContent = "▶ Thought Logs (DeepSeek R1)";
+    const thoughtExpandBtn = activeValkyrieCard.querySelector(".thought-expand-btn");
+    if (thoughtExpandBtn) {
+      thoughtExpandBtn.style.display = "none";
+    }
     
     // Aggregate results by file
     const fileMap = new Map();
@@ -1896,7 +2315,7 @@ function updateActiveValkyrieCard(type, data) {
     }
   }
   
-  els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+  scrollChatToBottom(false);
 }
 
 // --- Diff Editor State & Management ---
@@ -1971,12 +2390,6 @@ function hideDiffEditor() {
     }
   }
 }
-
-function getLanguageForPath(filePath) {
-  const ext = filePath.split(".").pop().toLowerCase();
-  return LANGUAGE_BY_EXT[ext] || "plaintext";
-}
-
 async function triggerInlineReview(text, selection) {
   addChatMessage("system", "Triggering inline code review via Llama 3.3...");
   const activeTab = getActiveTab();
@@ -2018,9 +2431,316 @@ async function triggerInlineReview(text, selection) {
     card.className = "message system-message";
     card.innerHTML = html;
     els.chatMessages.appendChild(card);
-    els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+    scrollChatToBottom(true);
     
   } catch (err) {
     addChatMessage("system", `Inline review failed: ${err.message}`);
   }
+}
+
+// --- Inline Edit and Diff Implementation ---
+let activeInlineWidget = null;
+let activeInlineDiff = null;
+
+function showInlineEditWidget(editor) {
+  if (activeInlineWidget) {
+    editor.removeContentWidget(activeInlineWidget);
+    activeInlineWidget = null;
+  }
+
+  const position = editor.getPosition();
+  if (!position) return;
+
+  const selection = editor.getSelection();
+
+  const domNode = document.createElement('div');
+  domNode.className = 'inline-edit-widget';
+  domNode.style.position = 'absolute';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Ask AI to edit this code...';
+  domNode.appendChild(input);
+
+  const applyBtn = document.createElement('button');
+  applyBtn.className = 'inline-edit-apply';
+  applyBtn.innerHTML = '✓';
+  domNode.appendChild(applyBtn);
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'inline-edit-cancel';
+  cancelBtn.innerHTML = '✗';
+  domNode.appendChild(cancelBtn);
+
+  const widget = {
+    getId: () => 'inline-edit-widget',
+    getDomNode: () => domNode,
+    getPosition: () => {
+      return {
+        position: position,
+        preference: [
+          monaco.editor.ContentWidgetPositionPreference.BELOW,
+          monaco.editor.ContentWidgetPositionPreference.ABOVE
+        ]
+      };
+    }
+  };
+
+  activeInlineWidget = widget;
+  editor.addContentWidget(widget);
+  input.focus();
+
+  // Prevent editor from eating keys in the input
+  domNode.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+  }, true);
+
+  const triggerEdit = async () => {
+    const val = input.value.trim();
+    if (!val) return;
+
+    editor.removeContentWidget(widget);
+    activeInlineWidget = null;
+
+    await executeInlineEdit(editor, selection, val);
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      triggerEdit();
+    } else if (e.key === 'Escape') {
+      editor.removeContentWidget(widget);
+      activeInlineWidget = null;
+      editor.focus();
+    }
+  });
+
+  applyBtn.addEventListener('click', triggerEdit);
+  cancelBtn.addEventListener('click', () => {
+    editor.removeContentWidget(widget);
+    activeInlineWidget = null;
+    editor.focus();
+  });
+}
+
+async function executeInlineEdit(editor, selection, instruction) {
+  const activeTab = getActiveTab();
+  const filePath = activeTab ? activeTab.path : "unknown";
+  const model = editor.getModel();
+  
+  let range = selection;
+  if (range.isEmpty()) {
+    const position = editor.getPosition();
+    range = new monaco.Selection(position.lineNumber, 1, position.lineNumber, model.getLineMaxColumn(position.lineNumber));
+  }
+  
+  const selectedCode = model.getValueInRange(range);
+  const fullFileContent = model.getValue();
+  
+  setAgentBusy(true);
+  addChatMessage("system", `Inline Editing: "${instruction}"...`);
+  
+  try {
+    const apiKeys = {
+      openrouter: els.openRouterKeyInput?.value.trim() || "",
+      groq: els.groqKeyInput ? els.groqKeyInput.value.trim() : ""
+    };
+    
+    const res = await window.novaAPI.agent.inlineEdit({
+      instruction,
+      selectedCode,
+      fullFileContent,
+      filePath,
+      apiKeys
+    });
+    
+    setAgentBusy(false);
+    
+    if (res.error) {
+      addChatMessage("system", `Inline Edit failed: ${res.error}`);
+      return;
+    }
+    
+    if (!res.code) {
+      addChatMessage("system", `Inline Edit: AI did not return any replacement code.`);
+      return;
+    }
+    
+    showInlineDiff(editor, range, selectedCode, res.code);
+    
+  } catch (err) {
+    setAgentBusy(false);
+    addChatMessage("system", `Inline Edit failed: ${err.message}`);
+  }
+}
+
+function showInlineDiff(editor, selection, originalText, newText) {
+  if (activeInlineDiff) {
+    rejectActiveInlineDiff();
+  }
+
+  const model = editor.getModel();
+  const originalLines = originalText.split(/\r?\n/);
+  const newLines = newText.split(/\r?\n/);
+  
+  const compositeText = [...originalLines, ...newLines].join('\n');
+  const startLine = selection.startLineNumber;
+  
+  model.pushEditOperations(
+    [],
+    [{
+      range: selection,
+      text: compositeText,
+      forceMoveMarkers: true
+    }],
+    () => null
+  );
+  
+  const numOriginalLines = originalLines.length;
+  const numNewLines = newLines.length;
+  
+  const originalRange = new monaco.Range(
+    startLine, 
+    1, 
+    startLine + numOriginalLines - 1, 
+    model.getLineMaxColumn(startLine + numOriginalLines - 1)
+  );
+  
+  const newRange = new monaco.Range(
+    startLine + numOriginalLines, 
+    1, 
+    startLine + numOriginalLines + numNewLines - 1, 
+    model.getLineMaxColumn(startLine + numOriginalLines + numNewLines - 1)
+  );
+  
+  const decorations = editor.deltaDecorations([], [
+    {
+      range: originalRange,
+      options: {
+        isWholeLine: true,
+        className: 'inline-diff-remove',
+        marginClassName: 'inline-diff-remove-margin'
+      }
+    },
+    {
+      range: newRange,
+      options: {
+        isWholeLine: true,
+        className: 'inline-diff-add',
+        marginClassName: 'inline-diff-add-margin'
+      }
+    }
+  ]);
+  
+  const domNode = document.createElement('div');
+  domNode.className = 'inline-diff-actions';
+  domNode.style.position = 'absolute';
+  
+  const acceptBtn = document.createElement('button');
+  acceptBtn.className = 'inline-diff-accept';
+  acceptBtn.innerHTML = '✓ Accept';
+  
+  const rejectBtn = document.createElement('button');
+  rejectBtn.className = 'inline-diff-reject';
+  rejectBtn.innerHTML = '✗ Reject';
+  
+  domNode.appendChild(acceptBtn);
+  domNode.appendChild(rejectBtn);
+  
+  const actionsWidget = {
+    getId: () => 'inline-diff-actions-widget',
+    getDomNode: () => domNode,
+    getPosition: () => {
+      return {
+        position: { lineNumber: startLine, column: 1 },
+        preference: [
+          monaco.editor.ContentWidgetPositionPreference.ABOVE,
+          monaco.editor.ContentWidgetPositionPreference.BELOW
+        ]
+      };
+    }
+  };
+  
+  editor.addContentWidget(actionsWidget);
+  
+  activeInlineDiff = {
+    editor,
+    startLine,
+    numOriginalLines,
+    numNewLines,
+    decorations,
+    actionsWidget,
+    originalText,
+    newText
+  };
+  
+  acceptBtn.addEventListener('click', acceptActiveInlineDiff);
+  rejectBtn.addEventListener('click', rejectActiveInlineDiff);
+}
+
+function acceptActiveInlineDiff() {
+  if (!activeInlineDiff) return;
+  const { editor, startLine, numOriginalLines, numNewLines, decorations, actionsWidget, newText } = activeInlineDiff;
+  const model = editor.getModel();
+  
+  editor.deltaDecorations(decorations, []);
+  editor.removeContentWidget(actionsWidget);
+  
+  const totalLines = numOriginalLines + numNewLines;
+  const currentRange = new monaco.Range(
+    startLine,
+    1,
+    startLine + totalLines - 1,
+    model.getLineMaxColumn(startLine + totalLines - 1)
+  );
+  
+  model.pushEditOperations(
+    [],
+    [{
+      range: currentRange,
+      text: newText,
+      forceMoveMarkers: true
+    }],
+    () => null
+  );
+  
+  activeInlineDiff = null;
+  editor.focus();
+  
+  const activeTab = getActiveTab();
+  if (activeTab) {
+    activeTab.content = model.getValue();
+    activeTab.isDirty = true;
+    renderTabs();
+  }
+}
+
+function rejectActiveInlineDiff() {
+  if (!activeInlineDiff) return;
+  const { editor, startLine, numOriginalLines, numNewLines, decorations, actionsWidget, originalText } = activeInlineDiff;
+  const model = editor.getModel();
+  
+  editor.deltaDecorations(decorations, []);
+  editor.removeContentWidget(actionsWidget);
+  
+  const totalLines = numOriginalLines + numNewLines;
+  const currentRange = new monaco.Range(
+    startLine,
+    1,
+    startLine + totalLines - 1,
+    model.getLineMaxColumn(startLine + totalLines - 1)
+  );
+  
+  model.pushEditOperations(
+    [],
+    [{
+      range: currentRange,
+      text: originalText,
+      forceMoveMarkers: true
+    }],
+    () => null
+  );
+  
+  activeInlineDiff = null;
+  editor.focus();
 }
