@@ -1,4 +1,4 @@
-# ⚡ Valkyrie — The Multi-Agent Harness
+#  Valkyrie — The Multi-Agent Harness
 
 > The brain behind NOVA IDE's autonomous coding engine.
 
@@ -92,14 +92,14 @@ User prompt
 
 ## The Three Models In Detail
 
-### 🧠 DeepSeek R1 — The Architect
+###  DeepSeek R1 — The Architect
 - **When it runs:** Once, at the very start of every Valkyrie prompt.
 - **What it gets:** Your natural language request + the active file path.
 - **What it does:** Thinks deeply (you see "planning…" in the status) and produces a **structured JSON task list**. Each task has a description, an assigned file, and a priority.
 - **Key strength:** Chain-of-thought reasoning. It figures out the *order* of operations (e.g. "create the class first, then wire it in the main block").
 - **Fallback:** If JSON parsing fails, Valkyrie uses a partial-JSON extractor to rescue as many tasks as possible.
 
-### 💻 Qwen 2.5 Coder 32B — The Engineer
+###  Qwen 2.5 Coder 32B — The Engineer
 - **When it runs:** Once per task, per attempt (up to 3×).
 - **What it gets:** The task description, the full current file content, and any reviewer feedback from prior failed attempts.
 - **What it does:** Writes actual code. It can:
@@ -108,6 +108,8 @@ User prompt
   - Produce a unified diff
 - **Smart retry:** If the reviewer said "your diff was malformed", the retry prompt forces Qwen into full-file mode so it can't produce partial/corrupt diffs.
 - **Streaming:** The diff is streamed token-by-token to the UI so you see it being written in real time.
+
+### Gemini flash 2.5 Coder - Better perfomring then Qwen 2.5 Coder 32B
 
 ### 🦙 Llama 3.3 70B — The Reviewer
 - **When it runs:** After every Coder output, before any file is touched.
