@@ -15,7 +15,7 @@
 
 ---
 
-## 🛠️ Architecture & System Topology
+##  Architecture & System Topology
 
 NOVA leverages a multi-tiered architecture to achieve deep filesystem integration, local state management, vector-based semantic retrieval, and low-latency agent streaming.
 
@@ -29,41 +29,41 @@ graph TD
     classDef provider fill:#1e1e2e,stroke:#f38ba8,stroke-width:2px,color:#cdd6f4;
     classDef local fill:#11111b,stroke:#74c7ec,stroke-width:2px,color:#cdd6f4;
 
-    subgraph ElectronShell ["🖥️ Electron Desktop Shell (macOS, Windows, Linux)"]
+    subgraph ElectronShell ["Electron Desktop Shell (macOS, Windows, Linux)"]
         
-        subgraph UI ["🎨 User Interface Layer"]
-            ME["💻 Monaco Editor (File workspace)"]
-            FE["📂 File Explorer (Direct Node.js fs)"]
-            TM["🖥️ Terminal (node-pty + xterm.js)"]
-            RC["💬 Rapid-Chat AI Panel"]
-            DP["🔍 Review & Diff Panel (Antigravity-Style)"]
+        subgraph UI [" User Interface Layer"]
+            ME[" Monaco Editor (File workspace)"]
+            FE[" File Explorer (Direct Node.js fs)"]
+            TM[" Terminal (node-pty + xterm.js)"]
+            RC[" Rapid-Chat AI Panel"]
+            DP[" Review & Diff Panel (Antigravity-Style)"]
         end
         
-        subgraph Orchestrator ["⚡ Agent Harness (Valkyrie Engine)"]
-            PL["📝 Planner (DeepSeek R1)"]
-            CD["💻 Coder (Qwen3-Coder 480B)"]
-            RV["🧐 Reviewer (Llama 3.3 70B)"]
-            IN["⚡ Fast Inline (Gemini 2.0 Flash)"]
-            TL["🔧 IPC Tools (read_file, write_file, run_cmd, search_codebase, git_diff)"]
+        subgraph Orchestrator [" Agent Harness (Valkyrie Engine)"]
+            PL[" Planner (DeepSeek R1)"]
+            CD[" Coder (Qwen3-Coder 480B)"]
+            RV[" Reviewer (Llama 3.3 70B)"]
+            IN[" Fast Inline (Gemini 2.0 Flash)"]
+            TL[" IPC Tools (read_file, write_file, run_cmd, search_codebase, git_diff)"]
         end
 
-        subgraph Context ["🧠 Context Engine"]
-            TS["🌳 tree-sitter AST & Symbols"]
-            VS["📦 Vectra Local Vector Store"]
+        subgraph Context [" Context Engine"]
+            TS[" tree-sitter AST & Symbols"]
+            VS[" Vectra Local Vector Store"]
         end
     end
 
-    subgraph APIProviders ["🔌 Free API Infrastructure"]
-        OR["🌐 OpenRouter (DeepSeek R1, Qwen3-Coder)"]
-        GR["🚀 Groq (Llama 3.3 70B at 700+ t/s)"]
-        AS["⚡ Google AI Studio (Gemini 2.0 Flash)"]
-        OL["🏠 Ollama (Fully Local Fallbacks)"]
+    subgraph APIProviders [" Free API Infrastructure"]
+        OR[" OpenRouter (DeepSeek R1, Qwen3-Coder)"]
+        GR[" Groq (Llama 3.3 70B at 700+ t/s)"]
+        AS[" Google AI Studio (Gemini 2.0 Flash)"]
+        OL[" Ollama (Fully Local Fallbacks)"]
     end
 
-    subgraph Storage ["💾 Local Storage Layer"]
-        DB["🗄️ SQLite (Chat History / Project Stats)"]
-        IDB["📦 IndexedDB (Client Cache)"]
-        CF["⚙️ .nova/ (Local Config & Checkpoints)"]
+    subgraph Storage [" Local Storage Layer"]
+        DB[" SQLite (Chat History / Project Stats)"]
+        IDB[" IndexedDB (Client Cache)"]
+        CF[" .nova/ (Local Config & Checkpoints)"]
     end
 
     %% UI Connections
@@ -105,7 +105,7 @@ graph TD
 
 ---
 
-## ✨ Core Product Offerings
+##  Core Product Offerings
 
 ### 1. Zero-Cost Multi-Agent Orchestration (The Valkyrie Harness)
 Instead of relying on a single expensive model (e.g., GPT-4o or Claude 3.5 Sonnet) that costs $20/month, NOVA orchestrates a cohort of specialized, free LLMs inside a local feedback loop.
@@ -128,7 +128,7 @@ To avoid blowing past model context limits and hitting rate ceilings, NOVA parse
 
 ---
 
-## 🛠️ Technological Blueprint
+##  Technological Blueprint
 
 | Architectural Layer | Technology Stack | Purpose & Integration |
 | :--- | :--- | :--- |
@@ -145,7 +145,7 @@ To avoid blowing past model context limits and hitting rate ceilings, NOVA parse
 
 ---
 
-## 📅 15-Week Product Implementation Plan
+##  15-Week Product Implementation Plan
 
 NOVA is developed in six highly structured phases. Below is the comprehensive timeline for engineering completion.
 
@@ -154,7 +154,7 @@ NOVA is developed in six highly structured phases. Below is the comprehensive ti
 Weeks 1-3     Weeks 4-5     Weeks 6-9     Weeks 10-11   Weeks 12-13   Weeks 14-15
 ```
 
-### 🔴 Phase 1: Foundation (Weeks 1–3) — The Desktop Shell & Monaco Editor
+###  Phase 1: Foundation (Weeks 1–3) — The Desktop Shell & Monaco Editor
 **Objective:** Establish a robust Electron workspace that boots Monaco, renders the local directory, and runs a native terminal.
 
 *   [ ] **Week 1: Shell Scaffolding & Native Bridge**
@@ -172,7 +172,7 @@ Weeks 1-3     Weeks 4-5     Weeks 6-9     Weeks 10-11   Weeks 12-13   Weeks 14-1
 
 ---
 
-### 🟡 Phase 2: AI Sidebar Integration (Weeks 4–5) — Embedding Rapid-Chat
+###  Phase 2: AI Sidebar Integration (Weeks 4–5) — Embedding Rapid-Chat
 **Objective:** Adapt the high-performance Rapid-Chat interface into a native panel connected to local persistence.
 
 *   [ ] **Week 4: Stripping Rapid-Chat & Local Migration**
@@ -189,7 +189,7 @@ Weeks 1-3     Weeks 4-5     Weeks 6-9     Weeks 10-11   Weeks 12-13   Weeks 14-1
 
 ---
 
-### 🟢 Phase 3: The Valkyrie Agent Harness (Weeks 6–9) — Orchestrator Core
+###  Phase 3: The Valkyrie Agent Harness (Weeks 6–9) — Orchestrator Core
 **Objective:** Architect the multi-agent decision engine that parses, plans, codes, and self-reviews.
 
 ```
@@ -226,7 +226,7 @@ Weeks 1-3     Weeks 4-5     Weeks 6-9     Weeks 10-11   Weeks 12-13   Weeks 14-1
 
 ---
 
-### 🔵 Phase 4: Interactive Review Panel (Weeks 10–11) — Surgical Diffs
+###  Phase 4: Interactive Review Panel (Weeks 10–11) — Surgical Diffs
 **Objective:** Provide a visually premium interface to review, adjust, and merge AI-generated changes.
 
 *   [ ] **Week 10: Monaco Diff Editor & Checkpoints**
@@ -239,7 +239,7 @@ Weeks 1-3     Weeks 4-5     Weeks 6-9     Weeks 10-11   Weeks 12-13   Weeks 14-1
 
 ---
 
-### 🟣 Phase 5: Semantic Context Engine (Weeks 12–13) — codebase Indexing
+###  Phase 5: Semantic Context Engine (Weeks 12–13) — codebase Indexing
 **Objective:** Make the AI understand complex workspace dynamics without overloading the context window.
 
 *   [ ] **Week 12: Tree-sitter Indexing & Symbol Maps**
@@ -252,7 +252,7 @@ Weeks 1-3     Weeks 4-5     Weeks 6-9     Weeks 10-11   Weeks 12-13   Weeks 14-1
 
 ---
 
-### 🔘 Phase 6: Production Packaging (Weeks 14–15) — Installer & Distribution
+###  Phase 6: Production Packaging (Weeks 14–15) — Installer & Distribution
 **Objective:** Package the entire application into signed, highly-optimized production binaries.
 
 *   [ ] **Week 14: Cross-Platform Packaging & Keychain Storage**
@@ -266,15 +266,15 @@ Weeks 1-3     Weeks 4-5     Weeks 6-9     Weeks 10-11   Weeks 12-13   Weeks 14-1
 
 ---
 
-## ⚡ Developer Setup & Getting Started
+##  Developer Setup & Getting Started
 
-### 📋 Prerequisites
+###  Prerequisites
 Ensure you have the following installed on your machine:
 *   [Node.js](https://nodejs.org/) (v18.x or later)
 *   [npm](https://www.npmjs.com/) or [yarn](https://yarnpkg.com/)
 *   [Ollama](https://ollama.com/) (Optional — for offline model execution)
 
-### 📥 Installation & Running
+###  Installation & Running
 1.  **Clone the Repository:**
     ```bash
     git clone https://github.com/your-username/nova-ide.git
@@ -291,7 +291,7 @@ Ensure you have the following installed on your machine:
     npm start
     ```
 
-### 🔑 Local Key Configuration
+###  Local Key Configuration
 On first boot, NOVA will walk you through a beautiful onboarding sequence. If you want to configure keys manually, add the following keys to your system environment or feed them directly into the secure settings screen:
 ```env
 OPENROUTER_API_KEY=your_openrouter_key
@@ -301,7 +301,7 @@ GEMINI_API_KEY=your_gemini_key
 
 ---
 
-## ⚖️ System Guidelines & Code Integrity
+##  System Guidelines & Code Integrity
 
 To maintain high development velocity and codebase cleanliness, please adhere to these strict engineering laws:
 1.  **Strict Process Isolation:** Never execute direct filesystem mutations or system commands in the Renderer process. Always delegate to the Main process through the secure `preload.js` bridge.
@@ -311,6 +311,3 @@ To maintain high development velocity and codebase cleanliness, please adhere to
 
 ---
 
-<div align="center">
-  <sub>Built with ❤️ by developers, for developers. Powered by Open Source, Electron, Monaco, and Gemini.</sub>
-</div>
