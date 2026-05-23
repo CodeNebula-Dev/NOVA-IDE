@@ -75,17 +75,17 @@ class StreamThinkFilter {
   }
 }
 
-async function runCoder(task, fileContent, priorFeedback, apiKey, onDiffChunk) {
+async function runCoder(task, fileContent, priorFeedback, apiKey, onDiffChunk, coderModel) {
   const lineCount = fileContent ? fileContent.split(/\r?\n/).length : 0;
   const isFeedbackEmpty = !priorFeedback || priorFeedback.length === 0;
-  const forceOptionB = lineCount < 300 || !isFeedbackEmpty;
+  const forceOptionB = lineCount < 600 || !isFeedbackEmpty;
 
   let systemPrompt = "";
   if (forceOptionB) {
     systemPrompt = `You are the Lead Software Engineer Agent inside NOVA IDE. Your task is to execute the active architecture plan task and write file modifications.
 
 CRITICAL RULE:
-Because the target file is small (under 300 lines) or is being rewritten after prior mismatch feedback, you MUST use Option B: Full-File Replacement.
+Because the target file is small (under 600 lines) or is being rewritten after prior mismatch feedback, you MUST use Option B: Full-File Replacement.
 Option A (Search-and-Replace blocks) and Option C (Unified diffs) are STRICTLY FORBIDDEN and will fail patch matching!
 
 Option B: Full-File Replacement.
@@ -129,7 +129,7 @@ CRITICAL RULES — violating these will cause the task to fail:
 2. NEVER emit incomplete code or half-written functions. Always complete every code block.
 3. If unsure whether your search block will match exactly, use Option B (full file) instead.
 4. Every import statement that the new code needs MUST be present in the output.
-5. Choose Option B (full file) if the file is less than 300 lines OR if prior feedback mentions malformed diffs.
+5. Choose Option B (full file) if the file is less than 600 lines OR if prior feedback mentions malformed diffs.
 6. Ensure your output is valid, compile-ready syntax for the target language.`;
   }
 
@@ -137,9 +137,39 @@ CRITICAL RULES — violating these will cause the task to fail:
   if (task.contextData && task.contextData.workspaceFiles && task.contextData.workspaceFiles.length > 0) {
     const otherFiles = task.contextData.workspaceFiles.filter(f => f.relativePath !== task.assignedFile);
     if (otherFiles.length > 0) {
-      workspaceFilesText = "\n\nOther Workspace Files for Context:\n" + otherFiles.map(f => {
-        return `File: ${f.relativePath}\n\`\`\`\n${f.content}\n\`\`\``;
-      }).join("\n\n");
+      const isFree = !apiKey || apiKey.trim() === "";
+      let allowedFiles = otherFiles;
+      
+      if (isFree) {
+        // Filter to only files mentioned in the task description to save context
+        const taskLower = task.description.toLowerCase();
+        allowedFiles = otherFiles.filter(f => {
+          const base = require('path').basename(f.relativePath).toLowerCase();
+          return taskLower.includes(base) || taskLower.includes(require('path').parse(base).name);
+        });
+        
+        // Fallback to first 2 files if no explicit matches
+        if (allowedFiles.length === 0) {
+          allowedFiles = otherFiles.slice(0, 2);
+        }
+      }
+
+      let text = "";
+      let charCount = 0;
+      const maxChars = isFree ? 8000 : 100000;
+
+      for (const f of allowedFiles) {
+        const fileBlock = `File: ${f.relativePath}\n\`\`\`\n${f.content}\n\`\`\``;
+        if (charCount + fileBlock.length > maxChars) {
+          if (isFree) continue;
+        }
+        text += "\n\n" + fileBlock;
+        charCount += fileBlock.length;
+      }
+      
+      if (text) {
+        workspaceFilesText = "\n\nOther Workspace Files for Context:" + text;
+      }
     }
   }
 
@@ -171,60 +201,224 @@ MANDATORY RETRY INSTRUCTIONS:
 - NEVER leave functions incomplete. NEVER embed <<<<<<< SEARCH markers in actual code.`;
   }
 
-  if (!apiKey || apiKey.trim() === "") {
-    // Fall back to free Pollinations API
-    const apiURL = "https://text.pollinations.ai/v1/chat/completions";
-    
-    // (Removed streamed warning log from diff stream)
-    
-    const maxRetries = 3;
-    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-    
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        const response = await fetch(apiURL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userContent }
-            ],
-            model: "openai",
-            seed: 42,
-            private: true,
-            stream: true
-          })
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Pollinations free API error ${response.status}`);
+  let model = "qwen/qwen-2.5-coder-32b-instruct:free"; // Default free coder tier
+  if (coderModel) {
+    const modelMap = {
+      qwen: "qwen/qwen-2.5-coder-32b-instruct:free",
+      gemini: "google/gemini-2.5-flash:free",
+      llama: "meta-llama/llama-3.3-70b-instruct:free",
+      deepseek: "deepseek/deepseek-r1:free",
+      gemma: "google/gemma-3-27b-it:free"
+    };
+    if (modelMap[coderModel]) {
+      model = modelMap[coderModel];
+    } else if (coderModel.includes("/")) {
+      model = coderModel;
+    }
+  }
+
+  // Truncation detection logic
+  function checkTruncation(text) {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+
+    // Check Option B (Full File)
+    if (forceOptionB || (trimmed.includes("```") && !trimmed.includes("<<<<<<< SEARCH"))) {
+      const fences = (trimmed.match(/```/g) || []).length;
+      if (fences % 2 !== 0) return true; // Odd number of fences
+    }
+
+    // Check Option A (Search-and-Replace)
+    if (trimmed.includes("<<<<<<< SEARCH")) {
+      const lastSearch = trimmed.lastIndexOf("<<<<<<< SEARCH");
+      const lastReplace = trimmed.lastIndexOf(">>>>>>> REPLACE");
+      const lastEquals = trimmed.lastIndexOf("=======");
+      if (lastSearch > lastReplace || lastEquals > lastReplace) return true;
+    }
+
+    return false;
+  }
+
+  // Encapsulated streaming API request helper
+  const performStreamRequest = async (currentMessages) => {
+    let outputText = "";
+
+    if (!apiKey || apiKey.trim() === "") {
+      // Fall back to free Pollinations API
+      const apiURL = "https://text.pollinations.ai/v1/chat/completions";
+      const maxRetries = 5;
+      const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        const controller = new AbortController();
+        const initialTimeout = setTimeout(() => {
+          console.warn("[Coder] Pollinations initial request timed out.");
+          controller.abort();
+        }, 45000);
+
+        try {
+          const response = await fetch(apiURL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              messages: currentMessages,
+              model: "qwen-coder",
+              seed: 42,
+              private: true,
+              stream: true
+            }),
+            signal: controller.signal
+          });
+
+          clearTimeout(initialTimeout);
+
+          if (!response.ok) {
+            throw new Error(`Pollinations free API error ${response.status}`);
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder("utf-8");
+          const filter = new StreamThinkFilter((cleanText) => {
+            outputText += cleanText;
+            onDiffChunk(cleanText);
+          });
+
+          let streamBuffer = "";
+          let heartbeatTimer = setTimeout(() => {
+            console.warn("[Coder] Pollinations stream stalled. Aborting.");
+            controller.abort();
+          }, 20000);
+
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              clearTimeout(heartbeatTimer);
+              if (done) break;
+
+              heartbeatTimer = setTimeout(() => {
+                console.warn("[Coder] Pollinations stream stalled. Aborting.");
+                controller.abort();
+              }, 20000);
+
+              streamBuffer += decoder.decode(value, { stream: true });
+
+              let lineIndex;
+              while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
+                const line = streamBuffer.slice(0, lineIndex).trim();
+                streamBuffer = streamBuffer.slice(lineIndex + 1);
+
+                if (line.startsWith("data:")) {
+                  const dataStr = line.slice(5).trim();
+                  if (dataStr === "[DONE]") continue;
+
+                  try {
+                    const parsed = JSON.parse(dataStr);
+                    const text = parsed?.choices?.[0]?.delta?.content || parsed?.choices?.[0]?.delta?.reasoning || "";
+                    if (text) {
+                      filter.feed(text);
+                    }
+                  } catch (e) {
+                    // Ignore JSON parse errors
+                  }
+                }
+              }
+            }
+          } finally {
+            clearTimeout(heartbeatTimer);
+            try {
+              reader.releaseLock();
+            } catch (e) {}
+          }
+
+          filter.flush();
+          return outputText;
+        } catch (err) {
+          clearTimeout(initialTimeout);
+          if (attempt === maxRetries) {
+            throw err;
+          }
+          const isRateLimitOrServerErr = err.message && (
+            err.message.includes("429") || 
+            err.message.includes("502") || 
+            err.message.includes("503") || 
+            err.message.includes("504")
+          );
+          const retryDelay = isRateLimitOrServerErr ? (attempt * 8000) : (attempt * 3000);
+          console.warn(`[Coder Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying in ${retryDelay / 1000} seconds...]`);
+          onDiffChunk(`\n\n[Nova: Fallback connection failed (${err.message}). Retrying in ${retryDelay / 1000}s...]\n\n`);
+          await delay(retryDelay);
         }
-        
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        let fullDiff = "";
-        const filter = new StreamThinkFilter((cleanText) => {
-          fullDiff += cleanText;
-          onDiffChunk(cleanText);
+      }
+    } else {
+      // Call OpenRouter
+      const apiURL = "https://openrouter.ai/api/v1/chat/completions";
+      const controller = new AbortController();
+      const initialTimeout = setTimeout(() => {
+        console.warn("[Coder] OpenRouter initial request timed out.");
+        controller.abort();
+      }, 45000);
+
+      let response;
+      try {
+        response = await fetch(apiURL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`,
+            "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE",
+            "X-Title": "Nova IDE"
+          },
+          body: JSON.stringify({
+            model,
+            messages: currentMessages,
+            stream: true
+          }),
+          signal: controller.signal
         });
-        
-        let streamBuffer = "";
+      } finally {
+        clearTimeout(initialTimeout);
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Coder API Error (${response.status}): ${errorText}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      const filter = new StreamThinkFilter((cleanText) => {
+        outputText += cleanText;
+        onDiffChunk(cleanText);
+      });
+
+      let streamBuffer = "";
+      let heartbeatTimer = setTimeout(() => {
+        console.warn("[Coder] OpenRouter stream stalled. Aborting.");
+        controller.abort();
+      }, 20000);
+
+      try {
         while (true) {
           const { done, value } = await reader.read();
+          clearTimeout(heartbeatTimer);
           if (done) break;
-          
+
+          heartbeatTimer = setTimeout(() => {
+            console.warn("[Coder] OpenRouter stream stalled. Aborting.");
+            controller.abort();
+          }, 20000);
+
           streamBuffer += decoder.decode(value, { stream: true });
-          
+
           let lineIndex;
           while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
             const line = streamBuffer.slice(0, lineIndex).trim();
             streamBuffer = streamBuffer.slice(lineIndex + 1);
-            
+
             if (line.startsWith("data:")) {
               const dataStr = line.slice(5).trim();
               if (dataStr === "[DONE]") continue;
-              
+
               try {
                 const parsed = JSON.parse(dataStr);
                 const text = parsed?.choices?.[0]?.delta?.content || "";
@@ -232,89 +426,78 @@ MANDATORY RETRY INSTRUCTIONS:
                   filter.feed(text);
                 }
               } catch (e) {
-                // Ignore JSON parse errors
+                // Ignore JSON error
               }
             }
           }
         }
-        
-        filter.flush();
-        return fullDiff.trim();
-      } catch (err) {
-        if (attempt === maxRetries) {
-          throw err;
-        }
-        console.warn(`[Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying in 3 seconds...]`);
-        await delay(3000);
-      }
-    }
-  }
-
-  const model = "qwen/qwen-2.5-coder-32b-instruct:free"; // Default free coder tier
-  const apiURL = "https://openrouter.ai/api/v1/chat/completions";
-
-  const response = await fetch(apiURL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-      "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE",
-      "X-Title": "Nova IDE"
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent }
-      ],
-      stream: true
-    })
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Coder API Error (${response.status}): ${errorText}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let fullDiff = "";
-  const filter = new StreamThinkFilter((cleanText) => {
-    fullDiff += cleanText;
-    onDiffChunk(cleanText);
-  });
-
-  let streamBuffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    streamBuffer += decoder.decode(value, { stream: true });
-    
-    let lineIndex;
-    while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
-      const line = streamBuffer.slice(0, lineIndex).trim();
-      streamBuffer = streamBuffer.slice(lineIndex + 1);
-      
-      if (line.startsWith("data:")) {
-        const dataStr = line.slice(5).trim();
-        if (dataStr === "[DONE]") continue;
-
+      } finally {
+        clearTimeout(heartbeatTimer);
         try {
-          const parsed = JSON.parse(dataStr);
-          const text = parsed?.choices?.[0]?.delta?.content || "";
-          if (text) {
-            filter.feed(text);
-          }
-        } catch (e) {
-          // Ignore JSON error
-        }
+          reader.releaseLock();
+        } catch (e) {}
       }
+
+      filter.flush();
+      return outputText;
+    }
+  };
+
+  // Main prompt history
+  const messages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userContent }
+  ];
+
+  let accumulatedRawText = "";
+  let accumulatedCode = "";
+  let continuationCount = 0;
+  const maxContinuations = 3;
+
+  while (true) {
+    const rawChunkText = await performStreamRequest(messages);
+    
+    // Clean any Pollinations ad or footer from the raw response
+    const cleanRawChunk = cleanPollinationsAd(rawChunkText);
+    
+    accumulatedRawText += (accumulatedRawText ? "\n" : "") + cleanRawChunk;
+    
+    // Extract the code portion from this chunk
+    const extractedCode = extractCodeFromResponse(cleanRawChunk);
+    
+    if (accumulatedCode) {
+      accumulatedCode += "\n" + extractedCode;
+    } else {
+      accumulatedCode = extractedCode;
+    }
+
+    if (checkTruncation(accumulatedRawText) && continuationCount < maxContinuations) {
+      continuationCount++;
+      console.log(`[Coder] Output detected as truncated. Triggering continuation ${continuationCount}...`);
+
+      // Feed back the partial assistant answer
+      messages.push({ role: "assistant", content: cleanRawChunk });
+      messages.push({
+        role: "user",
+        content: "Your previous response was truncated/cut off. Please CONTINUE writing the rest of the code EXACTLY where you left off. Do NOT repeat any code you already wrote, and do NOT output introductory text. Start immediately with the next characters/lines."
+      });
+
+      // Stream a smooth indicator to the UI
+      onDiffChunk("\n\n[Nova: Continuing code generation...]\n\n");
+    } else {
+      break;
     }
   }
 
-  filter.flush();
-  return fullDiff.trim();
+  // If the model was choosing Option A (Search-and-Replace blocks), return them as is.
+  if (accumulatedCode.includes("<<<<<<< SEARCH") && accumulatedCode.includes(">>>>>>> REPLACE")) {
+    return accumulatedCode.trim();
+  }
+  
+  // Wrap in a clean markdown code fence matching the target file extension
+  const ext = require('path').extname(task.assignedFile).slice(1);
+  const lang = ext || "python";
+  return `\`\`\`${lang}\n${accumulatedCode}\n\`\`\``.trim();
 }
 
 function applySearchReplaceBlocks(source, patch) {
@@ -344,12 +527,21 @@ function applySearchReplaceBlocks(source, patch) {
       });
       currentBlock = null;
     } else {
-      if (inSearch) {
+      if (inSearch && currentBlock) {
         currentBlock.search.push(line);
-      } else if (inReplace) {
+      } else if (inReplace && currentBlock) {
         currentBlock.replace.push(line);
       }
     }
+  }
+
+  // Fallback for truncated/unclosed blocks (missing final >>>>>>> REPLACE marker)
+  if (inReplace && currentBlock && currentBlock.search.length > 0) {
+    console.log("[Coder] Recovered unclosed search-and-replace block due to truncation.");
+    blocks.push({
+      search: currentBlock.search.join("\n"),
+      replace: currentBlock.replace.join("\n")
+    });
   }
 
   if (blocks.length === 0) return null;
@@ -408,7 +600,33 @@ function applySearchReplaceBlocks(source, patch) {
       sourceLines.splice(matchStartIdx, searchLines.length, replaceNormalized);
       currentSource = sourceLines.join("\n");
     } else {
-      throw new Error(`Could not find a match for search block:\n${searchNormalized}`);
+      // Fuzzy contiguous line matching fallback
+      let fuzzyMatchStartIdx = -1;
+      
+      const cleanLine = (l) => {
+        return l.trim().replace(/['"`\s;(),{}]/g, "").toLowerCase();
+      };
+      
+      for (let i = 0; i <= sourceLines.length - searchLines.length; i++) {
+        let isMatch = true;
+        for (let j = 0; j < searchLines.length; j++) {
+          if (cleanLine(sourceLines[i + j]) !== cleanLine(searchLines[j])) {
+            isMatch = false;
+            break;
+          }
+        }
+        if (isMatch) {
+          fuzzyMatchStartIdx = i;
+          break;
+        }
+      }
+      
+      if (fuzzyMatchStartIdx !== -1) {
+        sourceLines.splice(fuzzyMatchStartIdx, searchLines.length, replaceNormalized);
+        currentSource = sourceLines.join("\n");
+      } else {
+        throw new Error(`Could not find a match for search block:\n${searchNormalized}`);
+      }
     }
   }
 
@@ -422,13 +640,21 @@ function applySearchReplaceBlocks(source, patch) {
 function _applyPatchInternal(source, patch) {
   let cleaned = patch.trim();
   
-  // 1. Try to extract markdown code fences or custom tag blocks
-  const codeBlockMatch = cleaned.match(/```(?:[\w.+-]+)?\r?\n([\s\S]*?)\r?\n```/) || 
+  // 1. Try to extract markdown code fences or custom tag blocks (handling spaces/newlines robustly)
+  const codeBlockMatch = cleaned.match(/```(?:[\w.+-]+)?\s*\r?\n([\s\S]*?)\r?\n\s*```/) || 
                           cleaned.match(/<nova-code>([\s\S]*?)<\/nova-code>/);
   
   let codeBlockContent = null;
   if (codeBlockMatch) {
     codeBlockContent = codeBlockMatch[1].trim();
+  } else {
+    // Check for unclosed markdown or tags due to truncation cutoffs (with optional spaces)
+    const unclosedCodeBlockMatch = cleaned.match(/```(?:[\w.+-]+)?\s*\r?\n([\s\S]*)$/) ||
+                                   cleaned.match(/<nova-code>([\s\S]*)$/);
+    if (unclosedCodeBlockMatch) {
+      codeBlockContent = unclosedCodeBlockMatch[1].trim();
+      console.log("[Coder] Recovered unclosed code block content due to truncation.");
+    }
   }
 
   const targetContent = codeBlockContent !== null ? codeBlockContent : cleaned;
@@ -448,7 +674,7 @@ function _applyPatchInternal(source, patch) {
   const hasFileHeaders = targetContent.includes("--- ") && targetContent.includes("+++ ");
 
   // 4. Fall back to complete file replacement if it does not look like a unified diff.
-  if (!hasDiffHeader || (codeBlockMatch && !hasFileHeaders)) {
+  if (!hasDiffHeader || (codeBlockContent !== null && !hasFileHeaders)) {
     if (codeBlockContent !== null) {
       return codeBlockContent;
     }
@@ -600,7 +826,75 @@ function applyPatch(source, patch) {
   return result;
 }
 
+function cleanContinuationPrefix(text) {
+  if (!text) return "";
+  let cleaned = text.trim();
+  
+  // Regex to match conversational continuation headers securely
+  const prefixRegexes = [
+    /^(?:Here\s+is\s+the|Here's\s+the|Sure,\s+here's\s+the|Sure,\s+here\s+is\s+the|Certainly,\s+here\s+is\s+the)\s+(?:rest\s+of\s+the|continuation\s+of\s+the|remaining|continued)?\s*(?:code|file|script|implementation|imports|functions)(?:\s+from\s+where\s+it\s+was\s+cut\s+off|\s+due\s+to\s+truncation|\s+from\s+the\s+truncation\s+point)?:?\s*\r?\n?/i,
+    /^(?:Continuing(?:\s+code|\s+file|\s+script|\s+implementation|\s+imports|\s+functions)?(?:\s+from\s+where\s+it\s+was\s+cut\s+off|\s+due\s+to\s+truncation|\s+from\s+the\s+truncation\s+point)?|Continuing\s+from\s+where\s+we\s+left\s+off|Continuing\s+from\s+the\s+truncation\s+point|Your\s+previous\s+response\s+was\s+truncated\.?\s+Here\s+is\s+the\s+continuation|Here\s+is\s+the\s+continuation):?\s*\r?\n?/i
+  ];
+  
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const regex of prefixRegexes) {
+      const replaced = cleaned.replace(regex, "");
+      if (replaced !== cleaned) {
+        cleaned = replaced.trim();
+        changed = true;
+      }
+    }
+  }
+  
+  return cleaned;
+}
+
+function cleanPollinationsAd(text) {
+  if (!text) return "";
+  let cleaned = text;
+  cleaned = cleaned.replace(/---\s*\*?\*?Support\s+Pollinations\.AI:?\*?[\s\S]*$/i, "");
+  cleaned = cleaned.replace(/🌸\s*\*?\*?Ad\*?[\s\S]*$/i, "");
+  cleaned = cleaned.replace(/Powered\s+by\s+Pollinations\.AI[\s\S]*$/i, "");
+  cleaned = cleaned.replace(/Support\s+our\s+mission\s+to\s+keep\s+AI[\s\S]*$/i, "");
+  return cleaned.trim();
+}
+
+function extractCodeFromResponse(text) {
+  const cleaned = cleanPollinationsAd(text.trim());
+  
+  // Try to find a completed code block (handling spaces/newlines robustly)
+  const codeBlockMatch = cleaned.match(/```(?:[\w.+-]+)?\s*\r?\n([\s\S]*?)\r?\n\s*```/) || 
+                          cleaned.match(/<nova-code>([\s\S]*?)<\/nova-code>/);
+  if (codeBlockMatch) {
+    return cleanContinuationPrefix(codeBlockMatch[1].trim());
+  }
+  
+  // Try to find an unclosed code block due to truncation (with optional spaces)
+  const unclosedMatch = cleaned.match(/```(?:[\w.+-]+)?\s*\r?\n([\s\S]*)$/) ||
+                        cleaned.match(/<nova-code>([\s\S]*)$/);
+  if (unclosedMatch) {
+    return cleanContinuationPrefix(unclosedMatch[1].trim());
+  }
+  
+  let code = cleaned;
+  // If there's a closing fence but no opening fence in this chunk:
+  if (!code.startsWith("```") && code.includes("```")) {
+    const idx = code.lastIndexOf("```");
+    code = code.slice(0, idx).trim();
+  } else if (!code.startsWith("<nova-code>") && code.includes("</nova-code>")) {
+    const idx = code.lastIndexOf("</nova-code>");
+    code = code.slice(0, idx).trim();
+  }
+  
+  return cleanContinuationPrefix(code);
+}
+
 module.exports = {
   runCoder,
-  applyPatch
+  applyPatch,
+  cleanPollinationsAd,
+  extractCodeFromResponse
 };
+

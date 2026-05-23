@@ -1101,9 +1101,10 @@ body {
 }
 
 .chat-message.user .message-bubble {
-  background: var(--accent-dim);
-  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);
-  border: 1px solid rgba(203, 166, 247, 0.12);
+  background: linear-gradient(135deg, var(--accent-dim) 0%, rgba(203, 166, 247, 0.05) 100%);
+  border-radius: 12px 12px 2px 12px;
+  border: 1px solid var(--accent);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1), 0 0 10px var(--accent-dim);
 }
 
 .chat-message.assistant {
@@ -1111,9 +1112,10 @@ body {
 }
 
 .chat-message.assistant .message-bubble {
-  background: var(--bg-overlay);
-  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-sm);
+  background: linear-gradient(135deg, var(--bg-overlay) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border-radius: 12px 12px 12px 2px;
   border: 1px solid var(--border);
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
 }
 
 .chat-message.system {
@@ -3705,5 +3707,690 @@ a:focus-visible {
   font-family: var(--font-ui);
   font-size: var(--font-size-sm);
   padding: 2px 4px;
+}
+
+/* ─── Settings Modal Improvements ─── */
+.settings-modal-content {
+  width: 750px !important;
+  max-width: 90vw;
+  height: 520px;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-modal-body {
+  flex: 1;
+  display: flex !important;
+  flex-direction: row !important;
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.settings-sidebar {
+  width: 180px;
+  background: var(--bg-overlay);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 12px 8px;
+  gap: 4px;
+}
+
+.settings-tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: var(--font-size-base);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.settings-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.settings-tab-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.settings-panes {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-pane {
+  display: none;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.settings-pane.active {
+  display: flex;
+}
+
+.accent-color-picker-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.accent-color-input {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  width: 42px;
+  height: 28px;
+  background-color: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.accent-color-input::-webkit-color-swatch {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+/* ── Theme Presets Overrides ── */
+[data-theme="catppuccin-mocha"] {
+  /* Default Catppuccin Mocha */
+}
+
+[data-theme="catppuccin-latte"] {
+  --bg-base: #eff1f5;
+  --bg-surface: #e6e9ef;
+  --bg-overlay: #dce0e8;
+  --bg-mantle: #eff1f5;
+  --bg-crust: #ccd0da;
+  --border: #bcc0cc;
+  --border-active: #acb0be;
+  --text-primary: #4c4f69;
+  --text-secondary: #5c5f77;
+  --text-muted: #8c8fa1;
+  --text-subtle: #9ca0b0;
+  --accent: #8839ef;
+  --accent-hover: #7287fd;
+  --green: #40a02b;
+  --red: #d20f39;
+  --yellow: #df8e1d;
+  --blue: #1e66f5;
+}
+
+[data-theme="dracula"] {
+  --bg-base: #282a36;
+  --bg-surface: #21222c;
+  --bg-overlay: #191a21;
+  --bg-mantle: #282a36;
+  --bg-crust: #1e1f29;
+  --border: #44475a;
+  --border-active: #6272a4;
+  --text-primary: #f8f8f2;
+  --text-secondary: #e6e6e6;
+  --text-muted: #6272a4;
+  --text-subtle: #44475a;
+  --accent: #bd93f9;
+  --accent-hover: #ff79c6;
+  --green: #50fa7b;
+  --red: #ff5555;
+  --yellow: #f1fa8c;
+  --blue: #8be9fd;
+}
+
+[data-theme="one-dark-pro"] {
+  --bg-base: #282c34;
+  --bg-surface: #21252b;
+  --bg-overlay: #1e2227;
+  --bg-mantle: #282c34;
+  --bg-crust: #181a1f;
+  --border: #3e4451;
+  --border-active: #5c6370;
+  --text-primary: #abb2bf;
+  --text-secondary: #828997;
+  --text-muted: #5c6370;
+  --text-subtle: #4b5263;
+  --accent: #61afef;
+  --accent-hover: #c678dd;
+  --green: #98c379;
+  --red: #e06c75;
+  --yellow: #d19a66;
+  --blue: #61afef;
+}
+
+[data-theme="nord"] {
+  --bg-base: #2e3440;
+  --bg-surface: #3b4252;
+  --bg-overlay: #242933;
+  --bg-mantle: #2e3440;
+  --bg-crust: #1e222b;
+  --border: #434c5e;
+  --border-active: #4c566a;
+  --text-primary: #d8dee9;
+  --text-secondary: #e5e9f0;
+  --text-muted: #4c566a;
+  --text-subtle: #434c5e;
+  --accent: #88c0d0;
+  --accent-hover: #8fbcbb;
+  --green: #a3be8c;
+  --red: #bf616a;
+  --yellow: #ebcb8b;
+  --blue: #81a1c1;
+}
+
+[data-theme="solarized-dark"] {
+  --bg-base: #002b36;
+  --bg-surface: #073642;
+  --bg-overlay: #001f27;
+  --bg-mantle: #002b36;
+  --bg-crust: #00151a;
+  --border: #073642;
+  --border-active: #586e75;
+  --text-primary: #839496;
+  --text-secondary: #93a1a1;
+  --text-muted: #586e75;
+  --text-subtle: #657b83;
+  --accent: #268bd2;
+  --accent-hover: #2aa198;
+  --green: #859900;
+  --red: #dc322f;
+  --yellow: #b58900;
+  --blue: #268bd2;
+}
+
+/* ── Context Picker Dropdown & Chips ── */
+.context-dropdown {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 1000;
+  width: 180px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(8px);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.context-dropdown.hidden {
+  display: none !important;
+}
+
+.context-dropdown-item {
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-dropdown-item:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+.composer-context-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.1);
+  min-height: 28px;
+  align-items: center;
+}
+
+.composer-context-bar:empty {
+  display: none;
+}
+
+.context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.context-chip-icon {
+  font-size: 12px;
+}
+
+.context-chip-label {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-chip-close {
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+  margin-left: 2px;
+  transition: opacity 0.15s ease;
+}
+
+.context-chip-close:hover {
+  opacity: 0.7;
+}
+
+/* ── Save Status Indicator ── */
+.status-item.clean {
+  color: var(--green) !important;
+  font-weight: 500;
+}
+
+.status-item.dirty {
+  color: var(--yellow) !important;
+  font-weight: 500;
+  animation: pulse-opacity 2s infinite ease-in-out;
+}
+
+@keyframes pulse-opacity {
+  0% { opacity: 0.6; }
+  50% { opacity: 1; }
+  100% { opacity: 0.6; }
+}
+
+/* ── Code Header Action Buttons ── */
+.code-header-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.code-action-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.code-action-btn:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── Chat Typing Animation ── */
+.typing-bubble {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 16px !important;
+  background: var(--bg-overlay) !important;
+  border-radius: 12px 12px 12px 2px !important;
+  border: 1px solid var(--border) !important;
+  width: 58px;
+}
+
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--text-secondary);
+  border-radius: 50%;
+  animation: bounce-dots 1.4s infinite ease-in-out both;
+}
+
+.typing-dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+@keyframes bounce-dots {
+  0%, 80%, 100% {
+    transform: scale(0);
+  }
+  40% {
+    transform: scale(1);
+  }
+}
+
+/* ── Git Panel Styles ── */
+.git-panel-content {
+  display: flex;
+  flex-direction: column;
+  height: calc(100% - 50px);
+  overflow: hidden;
+}
+
+.git-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.git-branch-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.git-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  min-width: 45px;
+}
+
+.git-branch-selector-wrapper {
+  flex: 1;
+  position: relative;
+}
+
+.git-select {
+  width: 100%;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 4px 24px 4px 8px;
+  height: 28px;
+  cursor: pointer;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.git-select:hover, .git-select:focus {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.git-branch-selector-wrapper::after {
+  content: "▾";
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.git-action-icon-btn {
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+
+.git-action-icon-btn:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.git-sync-section {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+}
+
+.git-sync-btn {
+  flex: 1;
+  height: 28px;
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.git-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.git-files-section {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.git-files-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -8px;
+  padding: 0 8px;
+}
+
+.git-empty-state {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 24px 8px;
+  font-style: italic;
+}
+
+.git-file-group-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 8px 4px 4px 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  margin-bottom: 4px;
+}
+
+.git-file-group-count {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 1px 6px;
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.git-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s ease;
+}
+
+.git-file-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.git-file-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  opacity: 0.8;
+}
+
+.git-file-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.git-file-name {
+  font-size: 12px;
+  color: var(--text-primary);
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.git-file-path {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.git-file-actions {
+  display: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.git-file-item:hover .git-file-actions {
+  display: flex;
+}
+
+.git-file-action-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.git-file-action-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+.git-file-action-btn.stage-btn:hover {
+  color: var(--green);
+  background: rgba(40, 167, 69, 0.15);
+}
+
+.git-file-action-btn.unstage-btn:hover {
+  color: var(--red);
+  background: rgba(220, 53, 69, 0.15);
+}
+
+.git-file-status-badge {
+  font-size: 10px;
+  font-weight: 700;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+}
+
+.git-file-status-badge.status-modified {
+  color: var(--yellow);
+}
+
+.git-file-status-badge.status-added {
+  color: var(--green);
+}
+
+.git-file-status-badge.status-deleted {
+  color: var(--red);
+}
+
+.git-file-status-badge.status-untracked {
+  color: var(--accent);
+}
+
+.git-commit-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  padding: 14px 16px;
+}
+
+.git-commit-textarea {
+  width: 100%;
+  height: 52px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 8px;
+  resize: none;
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.git-commit-textarea:focus {
+  border-color: var(--accent);
+}
+
+.git-commit-btn {
+  width: 100%;
+  height: 28px;
+  font-size: 12px;
+  font-weight: 600;
 }
 

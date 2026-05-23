@@ -8,6 +8,7 @@ const fs = require('fs/promises');
 const fsSync = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { execSync } = require('child_process');
 const { runPlanner } = require('./planner');
 const { runCoder, applyPatch } = require('./coder');
 const { runReviewer } = require('./reviewer');
@@ -191,7 +192,8 @@ class ValkyrieEngine {
             (diffChunk) => {
               if (this.aborted) throw new Error("Valkyrie Aborted");
               this.emit('valkyrie:diff-chunk', { conversationId, chunk: diffChunk, taskId: task.id });
-            }
+            },
+            apiKeys.coderModel
           );
           // Track the best (longest/most complete) non-empty diff across attempts
           if (proposedDiff && proposedDiff.trim().length > (bestDiff ? bestDiff.trim().length : 0)) {
@@ -221,6 +223,15 @@ class ValkyrieEngine {
         } catch (err) {
           patchFailed = true;
           patchErrorMsg = err.message;
+        }
+
+        // Verify syntax correctness of the resulting file
+        if (!patchFailed) {
+          const syntaxCheck = checkSyntax(attemptPatchedContent, task.assignedFile);
+          if (!syntaxCheck.valid) {
+            patchFailed = true;
+            patchErrorMsg = syntaxCheck.reason;
+          }
         }
 
         if (patchFailed) {
@@ -286,9 +297,22 @@ class ValkyrieEngine {
       }
 
       if (!approved && !this.aborted) {
-        // Ultimate safety net: use the best diff seen across all attempts
+        // Ultimate safety net: use the best diff seen across all attempts but ONLY if it produces syntax-clean code!
         const diffToApply = bestDiff || proposedDiff;
+        let bestPatchedContent = "";
+        let bestPatchSyntaxValid = false;
+
         if (diffToApply && diffToApply.trim().length > 5) {
+          try {
+            bestPatchedContent = applyPatch(taskFileContent, diffToApply);
+            const syntaxCheck = checkSyntax(bestPatchedContent, task.assignedFile);
+            if (syntaxCheck.valid) {
+              bestPatchSyntaxValid = true;
+            }
+          } catch (e) {}
+        }
+
+        if (bestPatchSyntaxValid) {
           proposedDiff = diffToApply;
           approved = true;
           this.emit('valkyrie:status', {
@@ -297,7 +321,7 @@ class ValkyrieEngine {
           });
         } else {
           this.emit('valkyrie:error', { 
-            message: `Coder produced no usable output for task "${task.description}" after ${maxAttempts} attempts. Skipping task.` 
+            message: `Valkyrie Engine: Coder failed to produce syntax-clean code for task "${task.description}" after ${maxAttempts} attempts. Skipping task.` 
           });
           // Skip this task but continue with remaining tasks (don't abort the whole plan)
           task.status = 'failed';
@@ -337,6 +361,16 @@ class ValkyrieEngine {
         originalContent: taskFileContent,
         proposedContent: patchedContent
       });
+
+      // Small rate limit cooldown for Pollinations free API
+      const isFree = !apiKeys.openrouter || apiKeys.openrouter.trim() === "";
+      if (isFree && i < plan.length - 1) {
+        this.emit('valkyrie:status', { 
+          status: 'idle', 
+          message: `Task ${i+1}/${plan.length} complete. Cooling down for 5s to avoid rate limits...` 
+        });
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
     }
 
     if (this.aborted) {
@@ -379,7 +413,15 @@ class ValkyrieEngine {
     const files = [];
     const maxDepth = 4;
     
+    const IGNORED_DIRS = new Set([
+      '.git', 'node_modules', '.nova', '.venv', 'venv', 'env', '.env', 
+      '__pycache__', '.ds_store', 'dist', 'build', '.next', '.nuxt', 
+      'out', 'target', 'vendor', 'bower_components', '.idea', '.vscode', 
+      'tmp', 'temp', 'logs', 'coverage', '.cache', '.npm'
+    ]);
+    
     const scan = async (dir, currentDepth = 0) => {
+      if (files.length >= 1000) return;
       if (currentDepth > maxDepth) return;
       let entries;
       try {
@@ -389,8 +431,12 @@ class ValkyrieEngine {
       }
       
       for (const entry of entries) {
+        if (files.length >= 1000) return;
         const name = entry.name;
-        if (name === '.git' || name === 'node_modules' || name === '.nova' || name === '.venv' || name === '__pycache__' || name === '.DS_Store') {
+        const nameLower = name.toLowerCase();
+        
+        // Skip ignored directories, cache files, or hidden directories starting with '.'
+        if (IGNORED_DIRS.has(nameLower) || (entry.isDirectory() && name.startsWith('.'))) {
           continue;
         }
         
@@ -426,13 +472,24 @@ class ValkyrieEngine {
   }
 
   async buildTreeTextSummary() {
+    const IGNORED_DIRS = new Set([
+      '.git', 'node_modules', '.nova', '.venv', 'venv', 'env', '.env', 
+      '__pycache__', '.ds_store', 'dist', 'build', '.next', '.nuxt', 
+      'out', 'target', 'vendor', 'bower_components', '.idea', '.vscode', 
+      'tmp', 'temp', 'logs', 'coverage', '.cache', '.npm'
+    ]);
+
     try {
       const getTree = async (dir, depth = 0) => {
         if (depth > 2) return ""; // Limit depth to keep context small
         const entries = await fs.readdir(dir, { withFileTypes: true });
         let text = "";
         for (const entry of entries) {
-          if (entry.name === '.git' || entry.name === 'node_modules' || entry.name === '.nova') continue;
+          const nameLower = entry.name.toLowerCase();
+          if (IGNORED_DIRS.has(nameLower) || entry.name.startsWith('.')) {
+            continue;
+          }
+          
           text += "  ".repeat(depth) + entry.name + (entry.isDirectory() ? "/" : "") + "\n";
           if (entry.isDirectory()) {
             text += await getTree(path.join(dir, entry.name), depth + 1);
@@ -445,6 +502,70 @@ class ValkyrieEngine {
       return "Unable to scan directory structure.";
     }
   }
+}
+
+function checkSyntax(code, filepath) {
+  const ext = path.extname(filepath).toLowerCase();
+  
+  // 1. Basic structural completeness check first (unbalanced fences/stray markers)
+  if (code.includes("<<<<<<< SEARCH") || code.includes(">>>>>>> REPLACE") || code.includes("=======")) {
+    return { valid: false, reason: "Final code contains stray Search-and-Replace markers." };
+  }
+  
+  if (ext === '.json') {
+    try {
+      JSON.parse(code);
+      return { valid: true };
+    } catch (e) {
+      return { valid: false, reason: `JSON Parsing Syntax Error: ${e.message}` };
+    }
+  }
+  
+  if (ext === '.js') {
+    try {
+      const vm = require('vm');
+      new vm.Script(code);
+      return { valid: true };
+    } catch (e) {
+      return { valid: false, reason: `JavaScript Compilation Syntax Error: ${e.message}` };
+    }
+  }
+  
+  if (ext === '.py') {
+    const os = require('os');
+    const fs = require('fs');
+    const tempDir = path.join(os.tmpdir(), 'nova-syntax-check');
+    if (!fs.existsSync(tempDir)) {
+      try {
+        fs.mkdirSync(tempDir, { recursive: true });
+      } catch (e) {}
+    }
+    const tempFilePath = path.join(tempDir, `temp_check_${Date.now()}_${Math.random().toString(36).slice(2)}.py`);
+    try {
+      fs.writeFileSync(tempFilePath, code, 'utf8');
+      const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+      
+      // Execute py_compile and capture stderr
+      try {
+        execSync(`${pythonCmd} -m py_compile "${tempFilePath}"`, { stdio: 'pipe' });
+        return { valid: true };
+      } catch (errExec) {
+        const stderr = errExec.stderr ? errExec.stderr.toString() : (errExec.message || "");
+        const cleanStderr = stderr.replace(new RegExp(tempFilePath.replace(/\\/g, '\\\\'), 'g'), filepath);
+        return { valid: false, reason: `Python Syntax Error:\n${cleanStderr.trim()}` };
+      }
+    } catch (e) {
+      return { valid: false, reason: `Failed to compile Python code: ${e.message}` };
+    } finally {
+      try {
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath);
+        }
+      } catch (e) {}
+    }
+  }
+  
+  return { valid: true };
 }
 
 module.exports = {

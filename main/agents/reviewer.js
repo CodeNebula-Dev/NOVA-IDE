@@ -58,15 +58,34 @@ ${proposedPatch}
       private: true
     });
     
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      const response = await fetch(apiURL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body
-      });
-      
-      if (!response.ok) {
-        if (attempt === maxRetries) throw new Error(`Pollinations free API error ${response.status}`);
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const pollinationsRetries = 5;
+    for (let attempt = 1; attempt <= pollinationsRetries; attempt++) {
+      let response;
+      try {
+        response = await fetch(apiURL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          signal: AbortSignal.timeout(30000)
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Pollinations free API error ${response.status}`);
+        }
+      } catch (err) {
+        if (attempt === pollinationsRetries) {
+          throw err;
+        }
+        const isRateLimitOrServerErr = err.message && (
+          err.message.includes("429") || 
+          err.message.includes("502") || 
+          err.message.includes("503") || 
+          err.message.includes("504")
+        );
+        const retryDelay = isRateLimitOrServerErr ? (attempt * 8000) : (attempt * 4000);
+        console.warn(`[Reviewer Attempt ${attempt}/${pollinationsRetries} failed: ${err.message}. Retrying in ${retryDelay / 1000}s...]`);
+        await delay(retryDelay);
         continue;
       }
       
@@ -152,7 +171,8 @@ ${proposedPatch}
         ],
         temperature: 0.1,
         response_format: { type: "json_object" }
-      })
+      }),
+      signal: AbortSignal.timeout(30000)
     });
 
     if (!response.ok) {

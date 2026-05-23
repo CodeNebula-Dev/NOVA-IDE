@@ -7,6 +7,9 @@ const os = require("os");
 const crypto = require("crypto");
 const Database = require("better-sqlite3");
 const { ValkyrieEngine } = require("./main/agents/valkyrie");
+const { exec } = require("child_process");
+const util = require("util");
+const execPromise = util.promisify(exec);
 
 let mainWindow;
 let activeValkyrie = null;
@@ -74,6 +77,7 @@ function createMainWindow() {
     minHeight: 700,
     backgroundColor: "#0d0f14",
     title: "Nova IDE",
+    icon: path.join(__dirname, "assets/icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -413,60 +417,118 @@ ipcMain.handle("agent:chat", async (event, { agent, prompt, filePath, fileConten
 
   const orKey = apiKeys?.openrouter || "";
 
+  // Truncation detection logic for single agent
+  function checkSingleAgentTruncation(text) {
+    const trimmed = text.trim();
+    if (!trimmed) return false;
+
+    // Check <nova-code> tags
+    const novaCodeStartCount = (trimmed.match(/<nova-code>/g) || []).length;
+    const novaCodeEndCount = (trimmed.match(/<\/nova-code>/g) || []).length;
+    if (novaCodeStartCount > novaCodeEndCount) return true;
+
+    // Check markdown code blocks
+    const fences = (trimmed.match(/```/g) || []).length;
+    if (fences % 2 !== 0) return true;
+
+    return false;
+  }
+
   // --- Call OpenRouter if key present, otherwise Pollinations ---
-  let rawText = "";
+  const callApi = async (currentMessages) => {
+    if (orKey) {
+      const modelMap = {
+        deepseek: "deepseek/deepseek-r1:free",
+        qwen:     "qwen/qwen-2.5-coder-32b-instruct:free",
+        llama:    "meta-llama/llama-3.3-70b-instruct:free",
+        gemma:    "google/gemma-3-27b-it:free",
+        gemini:   "google/gemini-2.5-flash:free"
+      };
+      const model = modelMap[agent] || "meta-llama/llama-3.3-70b-instruct:free";
+      const body = JSON.stringify({ model, messages: currentMessages, max_tokens: 4096 });
 
-  if (orKey) {
-    const modelMap = {
-      deepseek: "deepseek/deepseek-r1:free",
-      qwen:     "qwen/qwen3-coder:free",
-      llama:    "meta-llama/llama-3.3-70b-instruct:free",
-      gemma:    "google/gemma-3-27b-it:free"
-    };
-    const model = modelMap[agent] || "meta-llama/llama-3.3-70b-instruct:free";
-    const body = JSON.stringify({ model, messages, max_tokens: 2048 });
-
-    const orResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${orKey}`,
-        "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE",
-        "X-Title": "Nova IDE"
-      },
-      body
-    });
-    if (!orResponse.ok) {
-      const errText = await orResponse.text();
-      throw new Error(`OpenRouter error ${orResponse.status}: ${errText.slice(0, 200)}`);
+      const orResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${orKey}`,
+          "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE",
+          "X-Title": "Nova IDE"
+        },
+        body,
+        signal: AbortSignal.timeout(30000)
+      });
+      if (!orResponse.ok) {
+        const errText = await orResponse.text();
+        throw new Error(`OpenRouter error ${orResponse.status}: ${errText.slice(0, 200)}`);
+      }
+      const data = await orResponse.json();
+      return data?.choices?.[0]?.message?.content || "";
+    } else {
+      // Pollinations — completely free, no key
+      const polBody = JSON.stringify({ messages: currentMessages, model: "openai", seed: 42, private: true });
+      const polResponse = await fetch("https://text.pollinations.ai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: polBody,
+        signal: AbortSignal.timeout(30000)
+      });
+      if (!polResponse.ok) throw new Error(`Pollinations error ${polResponse.status}`);
+      const resText = await polResponse.text();
+      try {
+        const data = JSON.parse(resText);
+        return data?.choices?.[0]?.message?.content || resText;
+      } catch (e) {
+        return resText;
+      }
     }
-    const data = await orResponse.json();
-    rawText = data?.choices?.[0]?.message?.content || "";
-  } else {
-    // Pollinations — completely free, no key
-    const polBody = JSON.stringify({ messages, model: "openai", seed: 42, private: true });
-    const polResponse = await fetch("https://text.pollinations.ai/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: polBody
-    });
-    if (!polResponse.ok) throw new Error(`Pollinations error ${polResponse.status}`);
-    const resText = await polResponse.text();
-    try {
-      const data = JSON.parse(resText);
-      rawText = data?.choices?.[0]?.message?.content || resText;
-    } catch (e) {
-      rawText = resText;
+  };
+
+  let rawText = "";
+  let continuationCount = 0;
+  const maxContinuations = 3;
+
+  while (true) {
+    const currentChunkText = await callApi(messages);
+    rawText += currentChunkText;
+
+    if (checkSingleAgentTruncation(rawText) && continuationCount < maxContinuations) {
+      continuationCount++;
+      console.log(`[Agent Chat] Output detected as truncated. Triggering continuation ${continuationCount}...`);
+
+      // Feed back the partial assistant answer
+      messages.push({ role: "assistant", content: currentChunkText });
+      messages.push({
+        role: "user",
+        content: "Your previous response was truncated/cut off. Please CONTINUE writing the rest of the response EXACTLY where you left off. Do NOT repeat any code or text you already wrote, and do NOT output introductory text. Start immediately with the next characters/lines."
+      });
+    } else {
+      break;
     }
   }
 
   // Extract code block if present
-  const codeMatch = rawText.match(/<nova-code>([\s\S]*?)<\/nova-code>/) ||
-                    rawText.match(/```[\w]*\r?\n([\s\S]*?)\r?\n```/);
-  const code = codeMatch ? codeMatch[1].trim() : null;
+  let codeMatch = rawText.match(/<nova-code>([\s\S]*?)<\/nova-code>/) ||
+                  rawText.match(/```[\w]*\r?\n([\s\S]*?)\r?\n```/);
+  
+  let code = null;
+  if (codeMatch) {
+    code = codeMatch[1].trim();
+  } else {
+    // Try unclosed blocks
+    const unclosedCodeMatch = rawText.match(/<nova-code>([\s\S]*)$/) ||
+                              rawText.match(/```[\w]*\r?\n([\s\S]*)$/);
+    if (unclosedCodeMatch) {
+      code = unclosedCodeMatch[1].trim();
+      console.log("[Agent Chat] Extracted unclosed code block content due to final truncation.");
+    }
+  }
+
   const text = rawText
     .replace(/<nova-code>[\s\S]*?<\/nova-code>/g, "")
     .replace(/```[\w]*\r?\n[\s\S]*?\r?\n```/g, "")
+    .replace(/<nova-code>[\s\S]*$/g, "")
+    .replace(/```[\w]*\r?\n[\s\S]*$/g, "")
     .trim();
 
   return { text: text || (code ? "Here is the updated code:" : ""), code, raw: rawText };
@@ -483,18 +545,24 @@ ipcMain.handle("agent:inline-edit", async (event, { instruction, selectedCode, f
 
   let result = "";
   if (orKey) {
-    const body = JSON.stringify({ model: "qwen/qwen3-coder:free", messages, max_tokens: 2048 });
+    const body = JSON.stringify({ model: "qwen/qwen-2.5-coder-32b-instruct:free", messages, max_tokens: 4096 });
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${orKey}`, "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE", "X-Title": "Nova IDE" },
-      body
+      body,
+      signal: AbortSignal.timeout(30000)
     });
     if (!response.ok) throw new Error(`OpenRouter error ${response.status}`);
     const data = await response.json();
     result = data?.choices?.[0]?.message?.content || "";
   } else {
     const body = JSON.stringify({ messages, model: "openai", seed: 42, private: true });
-    const response = await fetch("https://text.pollinations.ai/v1/chat/completions", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    const response = await fetch("https://text.pollinations.ai/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(30000)
+    });
     if (!response.ok) throw new Error(`Pollinations error ${response.status}`);
     const resText = await response.text();
     try {
@@ -509,6 +577,70 @@ ipcMain.handle("agent:inline-edit", async (event, { instruction, selectedCode, f
   result = result.replace(/^```[\w]*\n/, '').replace(/\n```$/, '').trim();
   return { code: result };
 });
+
+// ── Git Command Runner Helper ──
+async function runGitCommand(args) {
+  if (!workspaceRoot) {
+    return { success: false, error: "No open workspace. Please open a folder first." };
+  }
+  try {
+    const { stdout, stderr } = await execPromise(`git ${args}`, {
+      cwd: workspaceRoot,
+      maxBuffer: 10 * 1024 * 1024
+    });
+    return { success: true, stdout: stdout.trim(), stderr: stderr.trim() };
+  } catch (error) {
+    return { 
+      success: false, 
+      error: error.message, 
+      stdout: error.stdout?.trim() || "", 
+      stderr: error.stderr?.trim() || "" 
+    };
+  }
+}
+
+// ── Git IPC Handlers ──
+ipcMain.handle("git:status", async () => {
+  return await runGitCommand("status --porcelain");
+});
+
+ipcMain.handle("git:stage", async (_event, filePath) => {
+  const relative = path.relative(workspaceRoot, filePath);
+  return await runGitCommand(`add "${relative.replace(/"/g, '\\"')}"`);
+});
+
+ipcMain.handle("git:unstage", async (_event, filePath) => {
+  const relative = path.relative(workspaceRoot, filePath);
+  return await runGitCommand(`restore --staged "${relative.replace(/"/g, '\\"')}"`);
+});
+
+ipcMain.handle("git:commit", async (_event, message) => {
+  const sanitizedMsg = message.replace(/"/g, '\\"');
+  return await runGitCommand(`commit -m "${sanitizedMsg}"`);
+});
+
+ipcMain.handle("git:push", async () => {
+  return await runGitCommand("push");
+});
+
+ipcMain.handle("git:pull", async () => {
+  return await runGitCommand("pull");
+});
+
+ipcMain.handle("git:get-branches", async () => {
+  return await runGitCommand("branch -a");
+});
+
+ipcMain.handle("git:checkout", async (_event, branchName) => {
+  return await runGitCommand(`checkout "${branchName.replace(/"/g, '\\"')}"`);
+});
+
+ipcMain.handle("git:create-branch", async (_event, branchName) => {
+  return await runGitCommand(`checkout -b "${branchName.replace(/"/g, '\\"')}"`);
+});
+
+app.name = "Nova IDE";
+app.setName("Nova IDE");
 
 app.whenReady().then(() => {
   // DB is NOT initialized here — it's deferred to when a workspace is selected

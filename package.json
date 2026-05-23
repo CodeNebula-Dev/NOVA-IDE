@@ -1,5 +1,6 @@
 {
   "name": "nova-ide",
+  "productName": "Nova IDE",
   "version": "1.0.0",
   "description": "Nova IDE — AI-agent-first desktop code editor built with Electron",
   "main": "main.js",

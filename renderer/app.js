@@ -1,4 +1,9 @@
 const MODEL_CONFIG = {
+  gemini: {
+    label: "Gemini 2.5 Flash",
+    openrouterModel: "google/gemini-2.5-flash:free",
+    pollinationsModel: "openai"
+  },
   gemma: {
     label: "Gemma 3 27B",
     openrouterModel: "google/gemma-3-27b-it",
@@ -27,6 +32,11 @@ const MODEL_CONFIG = {
 };
 
 const SINGLE_AGENT_MODELS = {
+  gemini: {
+    label: "Gemini 2.5 Flash",
+    openrouterModel: "google/gemini-2.5-flash:free",
+    pollinationsModel: "openai"
+  },
   deepseek: {
     label: "DeepSeek R1",
     openrouterModel: "deepseek/deepseek-r1:free",
@@ -116,7 +126,8 @@ const state = {
   savingPaths: new Set(),
   editor: null, // Monaco editor instance reference
   currentConversationId: null,
-  conversations: []
+  conversations: [],
+  chatContexts: []
 };
 
 const saveTimers = new Map();
@@ -136,6 +147,19 @@ const els = {
   themeSelect: document.getElementById("themeSelect"),
   fontSizeSelect: document.getElementById("fontSizeSelect"),
   panelWidthSelect: document.getElementById("panelWidthSelect"),
+  uiThemeSelect: document.getElementById("uiThemeSelect"),
+  accentColorInput: document.getElementById("accentColorInput"),
+  fontFamilySelect: document.getElementById("fontFamilySelect"),
+  tabSizeSelect: document.getElementById("tabSizeSelect"),
+  wordWrapSelect: document.getElementById("wordWrapSelect"),
+  minimapSelect: document.getElementById("minimapSelect"),
+  lineNumbersSelect: document.getElementById("lineNumbersSelect"),
+  defaultProviderSelect: document.getElementById("defaultProviderSelect"),
+  defaultModelSelect: document.getElementById("defaultModelSelect"),
+  aiTemperatureInput: document.getElementById("aiTemperatureInput"),
+  aiTemperatureVal: document.getElementById("aiTemperatureVal"),
+  terminalFontSizeSelect: document.getElementById("terminalFontSizeSelect"),
+  terminalThemeSelect: document.getElementById("terminalThemeSelect"),
   fileTree: document.getElementById("fileTree"),
   newFileBtn: document.getElementById("newFileBtn"),
   newFolderBtn: document.getElementById("newFolderBtn"),
@@ -144,6 +168,7 @@ const els = {
   statusLanguage: document.getElementById("statusLanguage"),
   statusCursor: document.getElementById("statusCursor"),
   statusEncoding: document.getElementById("statusEncoding"),
+  statusSaveState: document.getElementById("statusSaveState"),
   providerSelect: document.getElementById("providerSelect"),
   modelSelect: document.getElementById("modelSelect"),
   modeSelect: document.getElementById("modeSelect"),
@@ -164,6 +189,11 @@ const els = {
   agentPromptInput: document.getElementById("agentPromptInput"),
   sendAgentPromptBtn: document.getElementById("sendAgentPromptBtn"),
   addContextBtn: document.getElementById("addContextBtn"),
+  composerContextBar: document.getElementById("composerContextBar"),
+  contextDropdown: document.getElementById("contextDropdown"),
+  contextAddActiveFile: document.getElementById("contextAddActiveFile"),
+  contextAddSelection: document.getElementById("contextAddSelection"),
+  contextAddAllTabs: document.getElementById("contextAddAllTabs"),
   toggleChatHistoryBtn: document.getElementById("toggleChatHistoryBtn"),
   agentStatusDot: document.getElementById("agentStatusDot"),
   agentStatusText: document.getElementById("agentStatusText"),
@@ -181,7 +211,9 @@ const els = {
   explorerPanel: document.getElementById('explorerPanel'),
   searchPanel: document.getElementById('searchPanel'),
   aiPanel: document.getElementById('aiPanel'),
-  terminalCloseBtn: document.getElementById('terminalCloseBtn')
+  terminalCloseBtn: document.getElementById('terminalCloseBtn'),
+  rapidChatContainer: document.getElementById("rapidChatContainer"),
+  rapidChatIframe: document.getElementById("rapidChatIframe")
 };
 
 // Monaco AMD setup
@@ -266,6 +298,7 @@ async function init() {
 
   addChatMessage("assistant", "Nova agent is ready. I'll include the active Monaco file as context in every request.");
   updateStatusBar();
+  initGit();
 }
 
 /**
@@ -331,6 +364,7 @@ function initMonaco() {
         }
       });
 
+      renderChatMessages();
       resolve();
     });
   });
@@ -585,8 +619,38 @@ function bindEvents() {
     });
   }
   if (els.addContextBtn) {
-    els.addContextBtn.addEventListener("click", addContextToPrompt);
+    els.addContextBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      els.contextDropdown?.classList.toggle("hidden");
+    });
   }
+
+  document.addEventListener("click", () => {
+    els.contextDropdown?.classList.add("hidden");
+  });
+
+  if (els.contextAddActiveFile) {
+    els.contextAddActiveFile.addEventListener("click", (e) => {
+      e.stopPropagation();
+      els.contextDropdown?.classList.add("hidden");
+      addActiveFileContext();
+    });
+  }
+  if (els.contextAddSelection) {
+    els.contextAddSelection.addEventListener("click", (e) => {
+      e.stopPropagation();
+      els.contextDropdown?.classList.add("hidden");
+      addSelectionContext();
+    });
+  }
+  if (els.contextAddAllTabs) {
+    els.contextAddAllTabs.addEventListener("click", (e) => {
+      e.stopPropagation();
+      els.contextDropdown?.classList.add("hidden");
+      addAllTabsContext();
+    });
+  }
+
   if (els.toggleChatHistoryBtn) {
     els.toggleChatHistoryBtn.addEventListener("click", toggleChatHistory);
   }
@@ -608,6 +672,10 @@ function bindEvents() {
       } else if (panel === 'search') {
         document.getElementById('searchPanel')?.classList.remove('hidden');
         sidebar?.classList.remove('collapsed');
+      } else if (panel === 'git') {
+        document.getElementById('gitPanel')?.classList.remove('hidden');
+        sidebar?.classList.remove('collapsed');
+        refreshGitPanel();
       } else if (panel === 'ai') {
         const aiPanel = document.getElementById('aiPanel');
         aiPanel?.classList.toggle('hidden');
@@ -692,6 +760,26 @@ function bindEvents() {
       createNewConversation();
     });
   }
+
+  // Settings Modal Tab switching & Slider
+  const tabBtns = document.querySelectorAll(".settings-tab-btn");
+  const panes = document.querySelectorAll(".settings-pane");
+  tabBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      tabBtns.forEach(b => b.classList.remove("active"));
+      panes.forEach(p => p.classList.remove("active"));
+      btn.classList.add("active");
+      const targetPane = document.getElementById(`pane-${btn.dataset.tab}`);
+      if (targetPane) targetPane.classList.add("active");
+    });
+  });
+
+  if (els.aiTemperatureInput && els.aiTemperatureVal) {
+    els.aiTemperatureInput.addEventListener("input", () => {
+      els.aiTemperatureVal.textContent = els.aiTemperatureInput.value;
+    });
+  }
+
   els.settingsBtn.addEventListener("click", () => {
     els.settingsModal.classList.remove("hidden");
   });
@@ -731,6 +819,7 @@ function bindEvents() {
 
   els.acceptDiffBtn?.addEventListener("click", async () => {
     try {
+      saveCurrentDiffChanges();
       const workspaceRoot = state.workspaceRoot || await window.novaAPI.getWorkspaceRoot();
 
       for (const file of valkyrieSession.modifiedFiles) {
@@ -767,19 +856,106 @@ function bindEvents() {
   });
 }
 
-/**
- * Add selected text from editor to prompt
- */
-function addContextToPrompt() {
-  const selection = getSelectedEditorText();
-  if (selection && els.agentPromptInput) {
-    const currentPrompt = els.agentPromptInput.value;
-    const separator = currentPrompt ? '\n\n' : '';
-    const contextBlock = `\`\`\`\n${selection}\n\`\`\``;
-    els.agentPromptInput.value = currentPrompt + separator + contextBlock;
-    els.agentPromptInput.focus();
-    console.log('✅ Context added to prompt');
+function addActiveFileContext() {
+  const activeTab = getActiveTab();
+  if (!activeTab) {
+    showToastNotification("No active file open!");
+    return;
   }
+  const id = `file-${activeTab.path}`;
+  if (state.chatContexts.some(ctx => ctx.id === id)) {
+    showToastNotification("Active file already added as context!");
+    return;
+  }
+  state.chatContexts.push({
+    id: id,
+    type: "file",
+    label: activeTab.name,
+    path: activeTab.path
+  });
+  renderContextChips();
+  showToastNotification("📄 Added active file to context");
+}
+
+function addSelectionContext() {
+  const selection = getSelectedEditorText();
+  if (!selection) {
+    showToastNotification("No text selected in editor!");
+    return;
+  }
+  const activeTab = getActiveTab();
+  const filename = activeTab ? activeTab.name : "Untitled";
+  const id = `selection-${Date.now()}`;
+  
+  state.chatContexts.push({
+    id: id,
+    type: "selection",
+    label: `Selection: ${filename}`,
+    value: selection
+  });
+  renderContextChips();
+  showToastNotification("✂️ Added selection to context");
+}
+
+function addAllTabsContext() {
+  if (!state.tabs || state.tabs.length === 0) {
+    showToastNotification("No open tabs!");
+    return;
+  }
+  const id = `all-tabs-${Date.now()}`;
+  if (state.chatContexts.some(ctx => ctx.type === "all-tabs")) {
+    showToastNotification("All open tabs already added to context!");
+    return;
+  }
+  state.chatContexts.push({
+    id: id,
+    type: "all-tabs",
+    label: `All Tabs (${state.tabs.length})`,
+    value: state.tabs.map(t => ({ name: t.name, path: t.path, content: t.content }))
+  });
+  renderContextChips();
+  showToastNotification("📂 Added all open tabs to context");
+}
+
+function renderContextChips() {
+  if (!els.composerContextBar) return;
+  els.composerContextBar.innerHTML = "";
+  
+  if (state.chatContexts.length === 0) {
+    els.composerContextBar.style.display = "none";
+    return;
+  }
+  
+  els.composerContextBar.style.display = "flex";
+  
+  state.chatContexts.forEach(ctx => {
+    const chip = document.createElement("div");
+    chip.className = "context-chip";
+    chip.dataset.id = ctx.id;
+    
+    let icon = "📄";
+    if (ctx.type === "selection") icon = "✂️";
+    if (ctx.type === "all-tabs") icon = "📂";
+    
+    chip.innerHTML = `
+      <span class="context-chip-icon">${icon}</span>
+      <span class="context-chip-label" title="${ctx.label}">${ctx.label}</span>
+      <span class="context-chip-close">×</span>
+    `;
+    
+    const closeBtn = chip.querySelector(".context-chip-close");
+    closeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      state.chatContexts = state.chatContexts.filter(c => c.id !== ctx.id);
+      renderContextChips();
+    });
+    
+    els.composerContextBar.appendChild(chip);
+  });
+}
+
+function showToastNotification(msg) {
+  addChatMessage("system", msg);
 }
 
 function getSelectedEditorText() {
@@ -916,6 +1092,9 @@ async function refreshWorkspaceTree() {
     renderFileTree();
     renderTabs();
     updateContextLabel();
+    if (state.workspaceRoot) {
+      refreshGitPanel().catch(() => {});
+    }
   } catch (error) {
     addChatMessage("system", `Failed to refresh file tree: ${error.message}`);
   }
@@ -962,7 +1141,7 @@ function renderTreeNode(node, depth) {
 
   const icon = document.createElement("span");
   icon.className = "tree-icon";
-  icon.textContent = getNodeIcon(node);
+  icon.innerHTML = getNodeIcon(node);
 
   const name = document.createElement("span");
   name.className = "tree-label";
@@ -1013,10 +1192,9 @@ function renderTreeNode(node, depth) {
 
 function getNodeIcon(node) {
   if (node.type === "folder") {
-    return "📁";
+    return state.expandedFolders.has(node.path) ? (window.NOVA_ICONS.folderOpen || "📁") : (window.NOVA_ICONS.folder || "📁");
   }
-  const ext = getExtension(node.name);
-  return ICON_BY_EXT[ext] || "📄";
+  return window.getFileIcon ? window.getFileIcon(node.name) : "📄";
 }
 
 function getExtension(fileName = "") {
@@ -1051,6 +1229,10 @@ function renderTabs() {
     }
 
     const fileName = tab.path.split("/").pop();
+    const tabIcon = document.createElement("span");
+    tabIcon.className = "tab-icon";
+    tabIcon.innerHTML = window.getFileIcon ? window.getFileIcon(fileName) : "📄";
+
     const title = document.createElement("span");
     title.textContent = fileName;
 
@@ -1066,7 +1248,7 @@ function renderTabs() {
       activateTab(tab.path);
     });
 
-    tabButton.append(title, closeBtn);
+    tabButton.append(tabIcon, title, closeBtn);
     els.tabsBar.appendChild(tabButton);
   }
 }
@@ -1254,6 +1436,20 @@ function updateStatusBar() {
   els.statusLanguage.textContent = language;
   els.statusCursor.textContent = `Ln ${cursor.line}, Col ${cursor.column}`;
   els.statusEncoding.textContent = "UTF-8";
+
+  const activeTab = getActiveTab();
+  if (els.statusSaveState) {
+    if (activeTab && activeTab.dirty) {
+      els.statusSaveState.textContent = "● Unsaved Changes";
+      els.statusSaveState.className = "status-item dirty";
+    } else if (activeTab) {
+      els.statusSaveState.textContent = "● Saved";
+      els.statusSaveState.className = "status-item clean";
+    } else {
+      els.statusSaveState.textContent = "";
+      els.statusSaveState.className = "status-item hidden";
+    }
+  }
 }
 
 function getCursorPosition() {
@@ -1356,6 +1552,45 @@ function renderModelOptions() {
 }
 
 function syncProviderUI() {
+  const isRapidChat = state.selectedAgent === "rapidchat" || state.provider === "rapidchat";
+  
+  // Hide or show Rapid-Chat Container
+  if (els.rapidChatContainer) {
+    els.rapidChatContainer.classList.toggle("hidden", !isRapidChat);
+    if (isRapidChat && els.rapidChatIframe) {
+      if (els.rapidChatIframe.src === "about:blank" || els.rapidChatIframe.src === "") {
+        els.rapidChatIframe.src = "https://speedchat.vercel.app";
+      }
+    }
+  }
+
+  // Toggle built-in chat messages and chat composer visibility
+  if (els.chatMessages) {
+    els.chatMessages.classList.toggle("hidden", isRapidChat);
+  }
+  const chatComposer = document.querySelector(".chat-composer");
+  if (chatComposer) {
+    chatComposer.classList.toggle("hidden", isRapidChat);
+  }
+  
+  // Hide conversations section
+  const conversationsSection = document.querySelector(".conversations-section-details");
+  if (conversationsSection) {
+    conversationsSection.classList.toggle("hidden", isRapidChat);
+  }
+  
+  if (isRapidChat) {
+    // Hide key wrappers and configurations
+    els.openRouterKeyWrap.classList.add("hidden");
+    if (els.groqKeyWrap) {
+      els.groqKeyWrap.classList.add("hidden");
+    }
+    if (els.modelHint) {
+      els.modelHint.textContent = "🚀 Running Rapid-Chat Interface (by your friend) embedded directly!";
+    }
+    return;
+  }
+
   const model = MODEL_CONFIG[state.modelKey];
   const isOpenRouter = state.provider === "openrouter";
   const isEditMode = state.mode === "edit";
@@ -1371,8 +1606,8 @@ function syncProviderUI() {
     els.modelHint.textContent = "⚡ Edit mode activates the Valkyrie Multi-Agent cohort (DeepSeek R1 + Qwen Coder + Llama 3.3). API Keys are required.";
   } else {
     els.modelHint.textContent = isOpenRouter
-      ? `OpenRouter model: ${model.openrouterModel} (free-tier availability can vary).`
-      : `Pollinations model: ${model.pollinationsModel} (no API key required).`;
+      ? `OpenRouter model: ${model?.openrouterModel || "default"} (free-tier availability can vary).`
+      : `Pollinations model: ${model?.pollinationsModel || "default"} (no API key required).`;
   }
 }
 
@@ -1567,6 +1802,36 @@ function renderChatMessages() {
 
     els.chatMessages.appendChild(chatMsg);
   }
+
+  if (state.agentBusy) {
+    const typingMsg = document.createElement("div");
+    typingMsg.className = "chat-message assistant typing";
+    
+    const bubble = document.createElement("div");
+    bubble.className = "message-bubble typing-bubble";
+    bubble.innerHTML = `
+      <div class="typing-dot"></div>
+      <div class="typing-dot"></div>
+      <div class="typing-dot"></div>
+    `;
+    
+    typingMsg.appendChild(bubble);
+    els.chatMessages.appendChild(typingMsg);
+  }
+
+  // Colorize code blocks using Monaco colorizer in real-time
+  if (window.monaco && monaco.editor && typeof monaco.editor.colorizeElement === 'function') {
+    const codeBlocks = els.chatMessages.querySelectorAll('pre code');
+    codeBlocks.forEach(block => {
+      if (!block.dataset.colorized) {
+        block.dataset.colorized = "true";
+        monaco.editor.colorizeElement(block, { theme: 'vs-dark' }).then(() => {
+          block.style.backgroundColor = 'transparent';
+        });
+      }
+    });
+  }
+
   scrollChatToBottom(true);
 }
 
@@ -1580,6 +1845,38 @@ window.copyCodeBlock = (btn, encodedCode) => {
       btn.classList.remove("copied");
     }, 2000);
   });
+};
+
+window.insertAtCursor = (encodedCode) => {
+  const code = decodeURIComponent(encodedCode);
+  if (!state.editor) {
+    showToastNotification("No active editor!");
+    return;
+  }
+  const selection = state.editor.getSelection();
+  const range = new monaco.Range(
+    selection.startLineNumber,
+    selection.startColumn,
+    selection.endLineNumber,
+    selection.endColumn
+  );
+  const id = { major: 1, minor: 1 };
+  const text = code;
+  const op = { identifier: id, range: range, text: text, forceMoveMarkers: true };
+  state.editor.executeEdits("my-source", [op]);
+  showToastNotification("Inserted code at cursor!");
+};
+
+window.applyToActiveFile = (encodedCode) => {
+  const code = decodeURIComponent(encodedCode);
+  const activeTab = getActiveTab();
+  if (!activeTab || !state.editor) {
+    showToastNotification("No active file open!");
+    return;
+  }
+  state.editor.setValue(code);
+  handleEditorInput();
+  showToastNotification(`Applied changes to ${activeTab.name}`);
 };
 
 function formatMessageContent(content) {
@@ -1597,7 +1894,11 @@ function formatMessageContent(content) {
     return `<div class="code-container">
   <div class="code-header">
     <span class="code-lang">${displayLang}</span>
-    <button class="copy-code-btn" onclick="window.copyCodeBlock(this, '${encoded}')"><svg style="width: 14px; height: 14px; margin-right: 4px; display: inline-block; vertical-align: middle;" viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" /><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" /></svg>Copy</button>
+    <div class="code-header-actions">
+      <button class="code-action-btn" onclick="window.copyCodeBlock(this, '${encoded}')">Copy</button>
+      <button class="code-action-btn" onclick="window.insertAtCursor('${encoded}')">Insert</button>
+      <button class="code-action-btn" onclick="window.applyToActiveFile('${encoded}')">Apply</button>
+    </div>
   </div>
   <pre><code class="language-${displayLang}">${code.trim()}</code></pre>
 </div>`;
@@ -1609,7 +1910,11 @@ function formatMessageContent(content) {
     return `<div class="code-container">
   <div class="code-header">
     <span class="code-lang">code</span>
-    <button class="copy-code-btn" onclick="window.copyCodeBlock(this, '${encoded}')"><svg style="width: 14px; height: 14px; margin-right: 4px; display: inline-block; vertical-align: middle;" viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" /><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" /></svg>Copy</button>
+    <div class="code-header-actions">
+      <button class="code-action-btn" onclick="window.copyCodeBlock(this, '${encoded}')">Copy</button>
+      <button class="code-action-btn" onclick="window.insertAtCursor('${encoded}')">Insert</button>
+      <button class="code-action-btn" onclick="window.applyToActiveFile('${encoded}')">Apply</button>
+    </div>
   </div>
   <pre><code>${code.trim()}</code></pre>
 </div>`;
@@ -1667,10 +1972,12 @@ function formatMessageContent(content) {
 }
 
 function setAgentBusy(isBusy) {
+  state.agentBusy = isBusy;
   els.agentStatusDot.classList.toggle("busy", isBusy);
   els.agentStatusText.textContent = isBusy ? "Thinking..." : "Ready";
   if (els.sendAgentBtn) els.sendAgentBtn.disabled = isBusy;
   if (els.sendAgentPromptBtn) els.sendAgentPromptBtn.disabled = isBusy;
+  renderChatMessages();
 }
 
 function buildFileTreeContext() {
@@ -1704,7 +2011,6 @@ function buildFileTreeContext() {
 }
 
 async function handleSendToAgent() {
-  // Get prompt from either new sticky panel or old input
   const prompt = (els.agentPromptInput?.value || els.agentInput?.value || "").trim();
   if (!prompt) {
     console.warn("⚠️  Empty prompt");
@@ -1719,6 +2025,7 @@ async function handleSendToAgent() {
   if (els.sendAgentPromptBtn) els.sendAgentPromptBtn.disabled = true;
   if (els.sendAgentBtn) els.sendAgentBtn.disabled = true;
 
+  // Add the CLEAN prompt to the chat history
   addChatMessage("user", prompt);
 
   // Update status to "Processing"
@@ -1739,6 +2046,31 @@ async function handleSendToAgent() {
     }
   }
 
+  // Compile enhancedPrompt with active contexts
+  let enhancedPrompt = prompt;
+  if (state.chatContexts && state.chatContexts.length > 0) {
+    let contextString = "\n\n--- CONTEXT DETAILS ---\n";
+    for (const ctx of state.chatContexts) {
+      if (ctx.type === "file") {
+        const tab = state.tabs.find(t => t.path === ctx.path);
+        const content = tab ? tab.content : "";
+        contextString += `\n[File: ${ctx.label}]\nPath: ${ctx.path}\nContent:\n\`\`\`\n${content}\n\`\`\`\n`;
+      } else if (ctx.type === "selection") {
+        contextString += `\n[Selected Code: ${ctx.label}]\nContent:\n\`\`\`\n${ctx.value}\n\`\`\`\n`;
+      } else if (ctx.type === "all-tabs") {
+        contextString += `\n[All Open Tabs]\n`;
+        for (const file of ctx.value) {
+          contextString += `\nFile: ${file.name}\nPath: ${file.path}\nContent:\n\`\`\`\n${file.content}\n\`\`\`\n`;
+        }
+      }
+    }
+    enhancedPrompt += contextString;
+  }
+
+  // Clear contexts and update chips in UI
+  state.chatContexts = [];
+  renderContextChips();
+
   setAgentBusy(true);
 
   try {
@@ -1750,10 +2082,10 @@ async function handleSendToAgent() {
 
     if (mode === 'multi-agent') {
       // ========== VALKYRIE MULTI-AGENT MODE ==========
-      await handleValkyrieExecution(prompt);
+      await handleValkyrieExecution(enhancedPrompt);
     } else {
       // ========== SINGLE AGENT MODE (RapidChat, etc) ==========
-      await handleSingleAgentExecution(prompt, selectedAgent);
+      await handleSingleAgentExecution(enhancedPrompt, selectedAgent);
     }
 
   } catch (error) {
@@ -1789,7 +2121,8 @@ async function handleValkyrieExecution(prompt) {
 
   const apiKeys = {
     openrouter: els.openRouterKeyInput?.value.trim() || "",
-    groq: els.groqKeyInput?.value.trim() || ""
+    groq: els.groqKeyInput?.value.trim() || "",
+    coderModel: state.modelKey
   };
 
   try {
@@ -1832,9 +2165,6 @@ async function handleValkyrieExecution(prompt) {
   }
 }
 
-/**
- * Execute using single agent (e.g., RapidChat style)
- */
 async function handleSingleAgentExecution(prompt, agent) {
   console.log(`🤖 Single agent mode: ${agent}`);
 
@@ -1861,29 +2191,22 @@ async function handleSingleAgentExecution(prompt, agent) {
       mode: els.modeSelect?.value || "chat"
     });
 
-    // Show response text in chat
-    if (response.text) addChatMessage("assistant", response.text);
+    // Show raw response (which contains code fences) in chat, or fallback to text if raw is empty
+    const chatDisplay = response.raw || response.text;
+    if (chatDisplay) addChatMessage("assistant", chatDisplay);
 
-    // If a code block was returned, store it for Apply and show diffs
+    // If a code block was returned, store it for Apply (without auto-opening diff view)
     if (response.code) {
       state.pendingApplyContent = response.code;
       updateApplyButtonState();
-      // Build diff result for Monaco diff viewer
-      const diffResults = [{
-        filePath: activeFilePath || "untitled",
-        originalContent: activeFileContent || "",
-        proposedContent: response.code,
-        task: { description: "Agent suggested changes" }
-      }];
-      showDiffsInEditor(diffResults);
-      addChatMessage("system", "💡 Code ready — click Apply to file or Accept Changes in the editor.");
+      addChatMessage("system", "💡 Code ready — click Apply in the chat bubble or use the Apply button at the bottom.");
     }
 
-    if (state.currentConversationId) {
+    if (state.currentConversationId && chatDisplay) {
       await window.novaAPI.chat.addMessage(
         state.currentConversationId,
         "assistant",
-        response.text,
+        chatDisplay,
         agent
       );
     }
@@ -1892,7 +2215,14 @@ async function handleSingleAgentExecution(prompt, agent) {
     console.warn('Single agent execution failed, using simulation fallback:', error);
     const simulated = await simulateSingleAgentFallback(prompt, agent);
     addChatMessage('assistant', simulated.text);
-    if (simulated.diffs) showDiffsInEditor(simulated.diffs);
+    
+    // Store simulated code for Apply
+    if (simulated.code) {
+      state.pendingApplyContent = simulated.code;
+      updateApplyButtonState();
+      addChatMessage("system", "💡 Simulated code ready — click Apply in the chat bubble or use the Apply button at the bottom.");
+    }
+
     if (state.currentConversationId) {
       try {
         await window.novaAPI.chat.addMessage(state.currentConversationId, 'assistant', simulated.text, agent + ' (sim)');
@@ -1933,17 +2263,22 @@ async function simulateValkyrieFallback(prompt, filePath) {
 
 async function simulateSingleAgentFallback(prompt, agent) {
   await new Promise(r => setTimeout(r, 800));
-  const text = `(${agent} sim) I would: analyze the code and suggest changes for: "${prompt}"`;
+  const activeTab = getActiveTab();
+  const file = activeTab ? activeTab.path : 'example.js';
+  const original = activeTab ? activeTab.content : '// original file content\nfunction hello() {\n  console.log("hi");\n}\n';
+  
+  // Create simulated proposed content
+  let proposed = original;
+  if (original.includes('console.log("hi");')) {
+    proposed = original.replace('console.log("hi");', 'console.log("hello from Nova simulation");');
+  } else {
+    proposed = original + '\n\n// Added by Nova AI Agent Simulation\nfunction novaHelper() {\n  return "Nova IDE active";\n}';
+  }
+  
+  const ext = file.split('.').pop() || 'javascript';
+  const text = `(${agent} sim) I have analyzed the code and solved your request: "${prompt}".\n\nHere are the simulated modifications for \`${file}\`:\n\n\`\`\`${ext}\n${proposed}\n\`\`\``;
 
-  // produce a minimal diffs object compatible with showDiffsInEditor
-  const diffs = [{
-    filePath: getActiveTab() ? getActiveTab().path : 'example.js',
-    originalContent: getActiveTab() ? getActiveTab().content : '// original',
-    proposedContent: (getActiveTab() ? getActiveTab().content : '// original').replace('TODO', 'done'),
-    task: { description: 'Simulated single-agent suggestion' }
-  }];
-
-  return { text, diffs };
+  return { text, code: proposed };
 }
 // --- end simulation helpers ------------------------------
 
@@ -2151,42 +2486,195 @@ function findFirstFilePath(node) {
 function loadSettings() {
   const settings = JSON.parse(localStorage.getItem("novaSettings") || "{}");
   
+  // UI Theme
+  if (settings.uiTheme) {
+    if (els.uiThemeSelect) els.uiThemeSelect.value = settings.uiTheme;
+    applyUITheme(settings.uiTheme);
+  } else {
+    applyUITheme("catppuccin-mocha");
+  }
+  
+  // Accent Color
+  if (settings.accentColor) {
+    if (els.accentColorInput) els.accentColorInput.value = settings.accentColor;
+    applyAccentColor(settings.accentColor);
+  }
+  
+  // Editor Theme
   if (settings.theme) {
     els.themeSelect.value = settings.theme;
     applyTheme(settings.theme);
   }
   
+  // Font Family
+  if (settings.fontFamily) {
+    if (els.fontFamilySelect) els.fontFamilySelect.value = settings.fontFamily;
+    applyFontFamily(settings.fontFamily);
+  }
+  
+  // Font Size
   if (settings.fontSize) {
     els.fontSizeSelect.value = settings.fontSize;
     applyFontSize(settings.fontSize);
   }
   
+  // Tab Size
+  if (settings.tabSize) {
+    if (els.tabSizeSelect) els.tabSizeSelect.value = settings.tabSize;
+    applyTabSize(settings.tabSize);
+  }
+  
+  // Word Wrap
+  if (settings.wordWrap) {
+    if (els.wordWrapSelect) els.wordWrapSelect.value = settings.wordWrap;
+    applyWordWrap(settings.wordWrap);
+  }
+  
+  // Minimap
+  if (settings.minimap) {
+    if (els.minimapSelect) els.minimapSelect.value = settings.minimap;
+    applyMinimap(settings.minimap === "true");
+  }
+  
+  // Line Numbers
+  if (settings.lineNumbers) {
+    if (els.lineNumbersSelect) els.lineNumbersSelect.value = settings.lineNumbers;
+    applyLineNumbers(settings.lineNumbers);
+  }
+  
+  // Panel/Sidebar Width
   if (settings.panelWidth) {
     els.panelWidthSelect.value = settings.panelWidth;
     applyPanelWidth(settings.panelWidth);
+  }
+  
+  // Default Provider
+  if (settings.defaultProvider) {
+    if (els.defaultProviderSelect) els.defaultProviderSelect.value = settings.defaultProvider;
+    if (els.providerSelect) {
+      els.providerSelect.value = settings.defaultProvider;
+      // Trigger UI updates
+      const event = new Event("change");
+      els.providerSelect.dispatchEvent(event);
+    }
+  }
+  
+  // Default Model
+  if (settings.defaultModel) {
+    if (els.defaultModelSelect) els.defaultModelSelect.value = settings.defaultModel;
+    if (els.modelModeSelect) {
+      els.modelModeSelect.value = settings.defaultModel;
+      const event = new Event("change");
+      els.modelModeSelect.dispatchEvent(event);
+    }
+  }
+  
+  // Temperature
+  if (settings.aiTemperature) {
+    if (els.aiTemperatureInput) {
+      els.aiTemperatureInput.value = settings.aiTemperature;
+      if (els.aiTemperatureVal) els.aiTemperatureVal.textContent = settings.aiTemperature;
+    }
+  }
+  
+  // Terminal Font Size
+  if (settings.terminalFontSize) {
+    if (els.terminalFontSizeSelect) els.terminalFontSizeSelect.value = settings.terminalFontSize;
+    applyTerminalFontSize(settings.terminalFontSize);
+  }
+  
+  // Terminal Theme
+  if (settings.terminalTheme) {
+    if (els.terminalThemeSelect) els.terminalThemeSelect.value = settings.terminalTheme;
+    applyTerminalTheme(settings.terminalTheme);
   }
 }
 
 function saveSettings() {
   const settings = {
+    uiTheme: els.uiThemeSelect ? els.uiThemeSelect.value : "catppuccin-mocha",
+    accentColor: els.accentColorInput ? els.accentColorInput.value : "#a6e3a1",
     theme: els.themeSelect.value,
+    fontFamily: els.fontFamilySelect ? els.fontFamilySelect.value : "Inter",
     fontSize: els.fontSizeSelect.value,
-    panelWidth: els.panelWidthSelect.value
+    tabSize: els.tabSizeSelect ? els.tabSizeSelect.value : "4",
+    wordWrap: els.wordWrapSelect ? els.wordWrapSelect.value : "on",
+    minimap: els.minimapSelect ? els.minimapSelect.value : "true",
+    lineNumbers: els.lineNumbersSelect ? els.lineNumbersSelect.value : "on",
+    panelWidth: els.panelWidthSelect.value,
+    defaultProvider: els.defaultProviderSelect ? els.defaultProviderSelect.value : "pollinations",
+    defaultModel: els.defaultModelSelect ? els.defaultModelSelect.value : "valkyrie",
+    aiTemperature: els.aiTemperatureInput ? els.aiTemperatureInput.value : "0.7",
+    terminalFontSize: els.terminalFontSizeSelect ? els.terminalFontSizeSelect.value : "13",
+    terminalTheme: els.terminalThemeSelect ? els.terminalThemeSelect.value : "match-ui"
   };
   
   localStorage.setItem("novaSettings", JSON.stringify(settings));
   
+  applyUITheme(settings.uiTheme);
+  applyAccentColor(settings.accentColor);
   applyTheme(settings.theme);
+  applyFontFamily(settings.fontFamily);
   applyFontSize(settings.fontSize);
+  applyTabSize(settings.tabSize);
+  applyWordWrap(settings.wordWrap);
+  applyMinimap(settings.minimap === "true");
+  applyLineNumbers(settings.lineNumbers);
   applyPanelWidth(settings.panelWidth);
+  applyTerminalFontSize(settings.terminalFontSize);
+  applyTerminalTheme(settings.terminalTheme);
+  
+  // Update AI provider & model selection if changed
+  if (els.providerSelect && els.providerSelect.value !== settings.defaultProvider) {
+    els.providerSelect.value = settings.defaultProvider;
+    const event = new Event("change");
+    els.providerSelect.dispatchEvent(event);
+  }
+  
+  if (els.modelModeSelect && els.modelModeSelect.value !== settings.defaultModel) {
+    els.modelModeSelect.value = settings.defaultModel;
+    const event = new Event("change");
+    els.modelModeSelect.dispatchEvent(event);
+  }
   
   els.settingsModal.classList.add("hidden");
   addChatMessage("system", "Settings saved successfully.");
 }
 
+function applyUITheme(uiTheme) {
+  document.documentElement.setAttribute("data-theme", uiTheme);
+}
+
+function applyAccentColor(color) {
+  document.documentElement.style.setProperty("--accent", color);
+  
+  // Also calculate and set accent-dim (opacity 0.15)
+  let r = 166, g = 227, b = 161;
+  if (color.startsWith("#")) {
+    const hex = color.slice(1);
+    if (hex.length === 3) {
+      r = parseInt(hex[0] + hex[0], 16);
+      g = parseInt(hex[1] + hex[1], 16);
+      b = parseInt(hex[2] + hex[2], 16);
+    } else if (hex.length === 6) {
+      r = parseInt(hex.slice(0, 2), 16);
+      g = parseInt(hex.slice(2, 4), 16);
+      b = parseInt(hex.slice(4, 6), 16);
+    }
+  }
+  document.documentElement.style.setProperty("--accent-dim", `rgba(${r}, ${g}, ${b}, 0.15)`);
+  document.documentElement.style.setProperty("--accent-hover", `rgba(${r}, ${g}, ${b}, 0.85)`);
+}
+
 function applyTheme(theme) {
   if (state.editor) {
     monaco.editor.setTheme(theme);
+  }
+}
+
+function applyFontFamily(fontFamily) {
+  if (state.editor) {
+    state.editor.updateOptions({ fontFamily: fontFamily });
   }
 }
 
@@ -2196,9 +2684,76 @@ function applyFontSize(fontSize) {
   }
 }
 
-function applyPanelWidth(panelWidth) {
-  const width = parseInt(panelWidth);
-  document.documentElement.style.setProperty('--sidebar-width', `${width}px`);
+function applyTabSize(tabSize) {
+  if (state.editor) {
+    state.editor.updateOptions({ tabSize: parseInt(tabSize) });
+  }
+}
+
+function applyWordWrap(wordWrap) {
+  if (state.editor) {
+    state.editor.updateOptions({ wordWrap: wordWrap });
+  }
+}
+
+function applyMinimap(enabled) {
+  if (state.editor) {
+    state.editor.updateOptions({ minimap: { enabled: enabled } });
+  }
+}
+
+function applyLineNumbers(lineNumbers) {
+  if (state.editor) {
+    state.editor.updateOptions({ lineNumbers: lineNumbers });
+  }
+}
+
+function applyPanelWidth(width) {
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar) {
+    const widthPx = width + 'px';
+    sidebar.style.width = widthPx;
+    sidebar.style.minWidth = widthPx;
+    document.documentElement.style.setProperty('--sidebar-width', widthPx);
+    if (state.editor) state.editor.layout();
+  }
+}
+
+function applyTerminalFontSize(fontSize) {
+  if (activeTerminal && activeTerminal.term) {
+    activeTerminal.term.options.fontSize = parseInt(fontSize);
+    setTimeout(() => {
+      if (activeTerminal.fit) activeTerminal.fit.fit();
+    }, 50);
+  }
+}
+
+function applyTerminalTheme(terminalTheme) {
+  if (activeTerminal && activeTerminal.term) {
+    let background = "#0d0f14";
+    if (terminalTheme === "pitch-black") {
+      background = "#000000";
+    } else if (terminalTheme === "match-ui") {
+      const computedStyle = getComputedStyle(document.documentElement);
+      background = computedStyle.getPropertyValue("--bg-crust").trim() || "#0d0f14";
+    }
+    
+    activeTerminal.term.options.theme = {
+      background: background,
+      foreground: "#cdd6f4",
+      cursor: "#cba6f7",
+      cursorAccent: "#1e1e2e",
+      selection: "rgba(255, 255, 255, 0.15)",
+      black: "#45475a",
+      red: "#f38ba8",
+      green: "#a6e3a1",
+      yellow: "#f9e2af",
+      blue: "#89b4fa",
+      magenta: "#f5c2e7",
+      cyan: "#94e2d5",
+      white: "#a6adc8"
+    };
+  }
 }
 
 // --- Valkyrie Agent Harness UI Management ---
@@ -2603,6 +3158,16 @@ let valkyrieSession = {
   activeIndex: 0
 };
 
+function saveCurrentDiffChanges() {
+  if (state.diffEditor) {
+    const activeFile = valkyrieSession.modifiedFiles[valkyrieSession.activeIndex];
+    const models = state.diffEditor.getModel();
+    if (activeFile && models && models.modified) {
+      activeFile.proposedContent = models.modified.getValue();
+    }
+  }
+}
+
 function renderDiffSidebar() {
   const listEl = document.getElementById("diffFileList");
   listEl.innerHTML = "";
@@ -2625,6 +3190,8 @@ function renderDiffSidebar() {
 }
 
 function showDiffEditorForIndex(index) {
+  saveCurrentDiffChanges();
+  
   valkyrieSession.activeIndex = index;
   renderDiffSidebar();
   
@@ -2657,6 +3224,8 @@ function showDiffEditorForIndex(index) {
 }
 
 function hideDiffEditor() {
+  saveCurrentDiffChanges();
+  
   document.getElementById("diffViewerWrapper").classList.add("hidden");
   els.monacoEditorContainer.classList.remove("hidden");
   els.diffControlBar.classList.add("hidden");
@@ -3023,3 +3592,405 @@ function rejectActiveInlineDiff() {
   activeInlineDiff = null;
   editor.focus();
 }
+
+// ── Git Integration Module ──
+
+function initGit() {
+  const gitRefreshBtn = document.getElementById("gitRefreshBtn");
+  const gitCreateBranchBtn = document.getElementById("gitCreateBranchBtn");
+  const gitBranchSelect = document.getElementById("gitBranchSelect");
+  const gitPullBtn = document.getElementById("gitPullBtn");
+  const gitPushBtn = document.getElementById("gitPushBtn");
+  const gitCommitBtn = document.getElementById("gitCommitBtn");
+  const gitCommitInput = document.getElementById("gitCommitInput");
+
+  if (gitRefreshBtn) {
+    gitRefreshBtn.addEventListener("click", () => {
+      refreshGitPanel();
+    });
+  }
+
+  if (gitCreateBranchBtn) {
+    gitCreateBranchBtn.addEventListener("click", handleCreateBranch);
+  }
+
+  if (gitBranchSelect) {
+    gitBranchSelect.addEventListener("change", handleBranchChange);
+  }
+
+  if (gitPullBtn) {
+    gitPullBtn.addEventListener("click", handleGitPull);
+  }
+
+  if (gitPushBtn) {
+    gitPushBtn.addEventListener("click", handleGitPush);
+  }
+
+  if (gitCommitBtn) {
+    gitCommitBtn.addEventListener("click", handleGitCommit);
+  }
+
+  if (gitCommitInput) {
+    gitCommitInput.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        handleGitCommit();
+      }
+    });
+  }
+}
+
+async function refreshGitPanel() {
+  if (!state.workspaceRoot) {
+    showGitPlaceholder("No open workspace. Please open a folder first.");
+    return;
+  }
+
+  try {
+    // 1. Fetch current status
+    const statusRes = await window.novaAPI.git.status();
+    if (!statusRes.success) {
+      if (statusRes.error && statusRes.error.includes("not a git repository")) {
+        showGitPlaceholder("Not a git repository. Open a folder with a Git repository.");
+      } else {
+        showGitPlaceholder(`Git error: ${statusRes.error || "Unknown error"}`);
+      }
+      return;
+    }
+
+    // 2. Fetch branches
+    const branchRes = await window.novaAPI.git.getBranches();
+    if (branchRes.success) {
+      renderGitBranches(branchRes.stdout);
+    }
+
+    // 3. Render changed files
+    renderGitChanges(statusRes.stdout);
+
+  } catch (error) {
+    console.error("Failed to refresh Git status:", error);
+    showGitPlaceholder(`Failed to load Git status: ${error.message}`);
+  }
+}
+
+function showGitPlaceholder(message) {
+  const gitChangesList = document.getElementById("gitChangesList");
+  if (gitChangesList) {
+    gitChangesList.innerHTML = `<div class="git-empty-state">${message}</div>`;
+  }
+  const gitBranchSelect = document.getElementById("gitBranchSelect");
+  if (gitBranchSelect) {
+    gitBranchSelect.innerHTML = `<option value="">None</option>`;
+    gitBranchSelect.disabled = true;
+  }
+}
+
+function renderGitBranches(branchOutput) {
+  const gitBranchSelect = document.getElementById("gitBranchSelect");
+  if (!gitBranchSelect) return;
+
+  gitBranchSelect.disabled = false;
+  gitBranchSelect.innerHTML = "";
+
+  // Parse branches
+  const lines = branchOutput.split("\n");
+  let activeBranch = "";
+  const branches = [];
+
+  for (let line of lines) {
+    line = line.trim();
+    if (!line) continue;
+
+    let isCurrent = false;
+    if (line.startsWith("*")) {
+      isCurrent = true;
+      line = line.substring(1).trim();
+    }
+
+    // Strip remotes prefix if any (e.g. remotes/origin/main)
+    let displayName = line;
+    if (line.startsWith("remotes/")) {
+      displayName = line.replace("remotes/", "");
+    }
+
+    branches.push({ name: line, displayName, isCurrent });
+    if (isCurrent) {
+      activeBranch = line;
+    }
+  }
+
+  // Populate select
+  branches.forEach(b => {
+    const opt = document.createElement("option");
+    opt.value = b.name;
+    opt.textContent = b.displayName;
+    opt.selected = b.isCurrent;
+    gitBranchSelect.appendChild(opt);
+  });
+}
+
+function renderGitChanges(statusOutput) {
+  const gitChangesList = document.getElementById("gitChangesList");
+  if (!gitChangesList) return;
+
+  gitChangesList.innerHTML = "";
+
+  const lines = statusOutput.split("\n").filter(l => l.trim());
+
+  if (lines.length === 0) {
+    gitChangesList.innerHTML = `<div class="git-empty-state">No changes detected</div>`;
+    return;
+  }
+
+  const stagedFiles = [];
+  const unstagedFiles = [];
+
+  for (const line of lines) {
+    const statusPart = line.substring(0, 2);
+    const filePath = line.substring(3).trim();
+    const fileName = filePath.split("/").pop();
+
+    const stagedCode = statusPart[0];
+    const unstagedCode = statusPart[1];
+
+    if (stagedCode !== " " && stagedCode !== "?") {
+      stagedFiles.push({
+        path: filePath,
+        name: fileName,
+        status: stagedCode,
+        isStaged: true
+      });
+    }
+
+    if (unstagedCode !== " ") {
+      unstagedFiles.push({
+        path: filePath,
+        name: fileName,
+        status: unstagedCode === "?" ? "U" : unstagedCode,
+        isStaged: false
+      });
+    }
+  }
+
+  if (stagedFiles.length > 0) {
+    const stagedHeader = document.createElement("div");
+    stagedHeader.className = "git-file-group-header";
+    stagedHeader.innerHTML = `<span>Staged Changes</span><span class="git-file-group-count">${stagedFiles.length}</span>`;
+    gitChangesList.appendChild(stagedHeader);
+
+    stagedFiles.forEach(file => {
+      gitChangesList.appendChild(createGitFileItem(file));
+    });
+  }
+
+  if (unstagedFiles.length > 0) {
+    const unstagedHeader = document.createElement("div");
+    unstagedHeader.className = "git-file-group-header";
+    unstagedHeader.innerHTML = `<span>Changes</span><span class="git-file-group-count">${unstagedFiles.length}</span>`;
+    gitChangesList.appendChild(unstagedHeader);
+
+    unstagedFiles.forEach(file => {
+      gitChangesList.appendChild(createGitFileItem(file));
+    });
+  }
+}
+
+function createGitFileItem(file) {
+  const item = document.createElement("div");
+  item.className = "git-file-item";
+
+  const icon = document.createElement("div");
+  icon.className = "git-file-icon";
+  icon.innerHTML = window.getFileIcon ? window.getFileIcon(file.name) : "📄";
+  item.appendChild(icon);
+
+  const info = document.createElement("div");
+  info.className = "git-file-info";
+  
+  const name = document.createElement("span");
+  name.className = "git-file-name";
+  name.textContent = file.name;
+  info.appendChild(name);
+
+  const pathSpan = document.createElement("span");
+  pathSpan.className = "git-file-path";
+  pathSpan.textContent = file.path;
+  info.appendChild(pathSpan);
+
+  item.appendChild(info);
+
+  const actions = document.createElement("div");
+  actions.className = "git-file-actions";
+
+  const actionBtn = document.createElement("button");
+  actionBtn.className = `git-file-action-btn ${file.isStaged ? "unstage-btn" : "stage-btn"}`;
+  actionBtn.title = file.isStaged ? "Unstage changes" : "Stage changes";
+  actionBtn.innerHTML = file.isStaged ? "-" : "+";
+
+  actionBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    try {
+      if (file.isStaged) {
+        await window.novaAPI.git.unstage(file.path);
+      } else {
+        await window.novaAPI.git.stage(file.path);
+      }
+      refreshGitPanel();
+    } catch (err) {
+      addChatMessage("system", `❌ Git Error: ${err.message}`);
+    }
+  });
+
+  actions.appendChild(actionBtn);
+  item.appendChild(actions);
+
+  const badge = document.createElement("span");
+  let statusClass = "status-untracked";
+  let letter = "U";
+
+  if (file.status === "M") {
+    statusClass = "status-modified";
+    letter = "M";
+  } else if (file.status === "A") {
+    statusClass = "status-added";
+    letter = "A";
+  } else if (file.status === "D") {
+    statusClass = "status-deleted";
+    letter = "D";
+  }
+
+  badge.className = `git-file-status-badge ${statusClass}`;
+  badge.textContent = letter;
+  item.appendChild(badge);
+
+  item.addEventListener("click", () => {
+    if (file.status !== "D") {
+      openFile(file.path);
+    }
+  });
+
+  return item;
+}
+
+async function handleBranchChange(e) {
+  const branchName = e.target.value;
+  if (!branchName) return;
+
+  try {
+    const res = await window.novaAPI.git.checkout(branchName);
+    if (res.success) {
+      addChatMessage("system", `Checked out branch <b>${branchName}</b>`);
+      refreshGitPanel();
+      refreshWorkspaceTree();
+    } else {
+      addChatMessage("system", `❌ Checkout failed: ${res.error}`);
+    }
+  } catch (err) {
+    addChatMessage("system", `❌ Checkout failed: ${err.message}`);
+  }
+}
+
+async function handleCreateBranch() {
+  const branchName = prompt("Enter new branch name:");
+  if (!branchName || !branchName.trim()) return;
+
+  try {
+    const res = await window.novaAPI.git.createBranch(branchName.trim());
+    if (res.success) {
+      addChatMessage("system", `Created and checked out branch <b>${branchName}</b>`);
+      refreshGitPanel();
+      refreshWorkspaceTree();
+    } else {
+      addChatMessage("system", `❌ Failed to create branch: ${res.error}`);
+    }
+  } catch (err) {
+    addChatMessage("system", `❌ Failed to create branch: ${err.message}`);
+  }
+}
+
+async function handleGitPull() {
+  const gitPullBtn = document.getElementById("gitPullBtn");
+  if (gitPullBtn) {
+    gitPullBtn.disabled = true;
+    gitPullBtn.textContent = "Pulling...";
+  }
+
+  try {
+    const res = await window.novaAPI.git.pull();
+    if (res.success) {
+      addChatMessage("system", `Successfully pulled changes from remote repository.`);
+      refreshGitPanel();
+      refreshWorkspaceTree();
+    } else {
+      addChatMessage("system", `❌ Pull failed: ${res.error || res.stderr}`);
+    }
+  } catch (err) {
+    addChatMessage("system", `❌ Pull failed: ${err.message}`);
+  } finally {
+    if (gitPullBtn) {
+      gitPullBtn.disabled = false;
+      gitPullBtn.textContent = "Pull";
+    }
+  }
+}
+
+async function handleGitPush() {
+  const gitPushBtn = document.getElementById("gitPushBtn");
+  if (gitPushBtn) {
+    gitPushBtn.disabled = true;
+    gitPushBtn.textContent = "Pushing...";
+  }
+
+  try {
+    const res = await window.novaAPI.git.push();
+    if (res.success) {
+      addChatMessage("system", `Successfully pushed changes to remote repository.`);
+      refreshGitPanel();
+    } else {
+      addChatMessage("system", `❌ Push failed: ${res.error || res.stderr}`);
+    }
+  } catch (err) {
+    addChatMessage("system", `❌ Push failed: ${err.message}`);
+  } finally {
+    if (gitPushBtn) {
+      gitPushBtn.disabled = false;
+      gitPushBtn.textContent = "Push";
+    }
+  }
+}
+
+async function handleGitCommit() {
+  const gitCommitInput = document.getElementById("gitCommitInput");
+  const gitCommitBtn = document.getElementById("gitCommitBtn");
+
+  if (!gitCommitInput || !gitCommitInput.value.trim()) {
+    addChatMessage("system", "⚠️ Please enter a commit message first.");
+    return;
+  }
+
+  const message = gitCommitInput.value.trim();
+
+  if (gitCommitBtn) {
+    gitCommitBtn.disabled = true;
+    gitCommitBtn.textContent = "Committing...";
+  }
+
+  try {
+    const res = await window.novaAPI.git.commit(message);
+    if (res.success) {
+      addChatMessage("system", `Successfully committed: "${message}"`);
+      gitCommitInput.value = "";
+      refreshGitPanel();
+    } else {
+      addChatMessage("system", `❌ Commit failed: ${res.error}`);
+    }
+  } catch (err) {
+    addChatMessage("system", `❌ Commit failed: ${err.message}`);
+  } finally {
+    if (gitCommitBtn) {
+      gitCommitBtn.disabled = false;
+      gitCommitBtn.textContent = "Commit";
+    }
+  }
+}
+

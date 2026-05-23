@@ -73,5 +73,18 @@ contextBridge.exposeInMainWorld("novaAPI", {
   agent: {
     chat: (payload) => ipcRenderer.invoke("agent:chat", payload),
     inlineEdit: (payload) => ipcRenderer.invoke("agent:inline-edit", payload)
+  },
+
+  // Git API
+  git: {
+    status: () => ipcRenderer.invoke("git:status"),
+    stage: (filePath) => ipcRenderer.invoke("git:stage", filePath),
+    unstage: (filePath) => ipcRenderer.invoke("git:unstage", filePath),
+    commit: (message) => ipcRenderer.invoke("git:commit", message),
+    push: () => ipcRenderer.invoke("git:push"),
+    pull: () => ipcRenderer.invoke("git:pull"),
+    getBranches: () => ipcRenderer.invoke("git:get-branches"),
+    checkout: (branchName) => ipcRenderer.invoke("git:checkout", branchName),
+    createBranch: (branchName) => ipcRenderer.invoke("git:create-branch", branchName)
   }
 });

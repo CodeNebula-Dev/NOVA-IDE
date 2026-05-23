@@ -39,6 +39,9 @@
           <button class="activity-btn" data-panel="search" title="Search">
             <span class="activity-icon" id="iconSearch">🔍</span>
           </button>
+          <button class="activity-btn" data-panel="git" title="Source Control">
+            <span class="activity-icon" id="iconGit">⌥</span>
+          </button>
         </div>
         <div class="activity-bar-bottom">
           <button class="activity-btn" id="terminalToggleBtn" title="Terminal">
@@ -85,6 +88,52 @@
           <div class="search-container">
             <input type="text" id="searchInput" class="search-input" placeholder="Search files..." autocomplete="off" />
             <div id="searchResults" class="search-results"></div>
+          </div>
+        </div>
+
+        <!-- Git Panel (hidden by default) -->
+        <div class="sidebar-panel hidden" id="gitPanel">
+          <div class="sidebar-header">
+            <span class="sidebar-title">SOURCE CONTROL</span>
+            <div class="sidebar-actions">
+              <button id="gitRefreshBtn" class="sidebar-action-btn" title="Refresh Git Status">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M23 4v6h-6M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="git-panel-content">
+            <!-- Branch Selector -->
+            <div class="git-section git-branch-section">
+              <div class="git-branch-header">
+                <span class="git-label">Branch</span>
+                <div class="git-branch-selector-wrapper">
+                  <select id="gitBranchSelect" class="git-select" title="Switch Branch"></select>
+                </div>
+                <button id="gitCreateBranchBtn" class="git-action-icon-btn" title="Create New Branch">+</button>
+              </div>
+            </div>
+
+            <!-- Sync (Pull / Push) Section -->
+            <div class="git-section git-sync-section">
+              <button id="gitPullBtn" class="git-sync-btn secondary-btn" title="Pull changes from remote">Pull</button>
+              <button id="gitPushBtn" class="git-sync-btn primary-btn" title="Push changes to remote">Push</button>
+            </div>
+
+            <!-- Changed Files List -->
+            <div class="git-section git-files-section">
+              <div class="git-section-title">Changes</div>
+              <div id="gitChangesList" class="git-files-list">
+                <div class="git-empty-state">No changes detected</div>
+              </div>
+            </div>
+
+            <!-- Commit Box -->
+            <div class="git-section git-commit-section">
+              <textarea id="gitCommitInput" class="git-commit-textarea" placeholder="Commit message... (⌘Enter to commit)" autocomplete="off"></textarea>
+              <button id="gitCommitBtn" class="git-commit-btn primary-btn">Commit</button>
+            </div>
           </div>
         </div>
       </aside>
@@ -191,6 +240,8 @@
               <option value="deepseek">DeepSeek R1</option>
               <option value="qwen">Qwen 2.5 Coder</option>
               <option value="llama">Llama 3.3 70B</option>
+              <option value="gemini">Gemini 2.5 Flash</option>
+              <option value="rapidchat">Rapid Chat (Friend's App)</option>
             </select>
           </div>
         </div>
@@ -207,6 +258,7 @@
               <select id="providerSelect" class="control-select">
                 <option value="pollinations">Pollinations (Free)</option>
                 <option value="openrouter">OpenRouter</option>
+                <option value="rapidchat">Rapid-Chat (Vercel)</option>
               </select>
             </label>
             <label class="control-label">
@@ -246,6 +298,11 @@
           <div id="conversationList" class="conversation-list"></div>
         </details>
 
+        <!-- Rapid-Chat Container (iframe) -->
+        <div id="rapidChatContainer" class="rapid-chat-container hidden" style="flex: 1; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 250px; background: #0c0c14; border: none; border-radius: 8px; overflow: hidden; margin-bottom: 8px;">
+          <iframe id="rapidChatIframe" src="about:blank" style="flex: 1; border: none; width: 100%; height: 100%;"></iframe>
+        </div>
+
         <!-- Chat Messages -->
         <div id="chatMessages" class="chat-messages"></div>
 
@@ -256,7 +313,7 @@
           </div>
           <textarea id="agentPromptInput" class="chat-textarea" placeholder="Ask Nova to chat, edit, explain, or debug… (⌘Enter to send)"></textarea>
           <div class="chat-actions">
-            <div class="chat-actions-left">
+            <div class="chat-actions-left" style="position: relative;">
               <button id="addContextBtn" class="composer-icon-btn" title="Add selection as context">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -264,6 +321,11 @@
                 </svg>
                 Context
               </button>
+              <div id="contextDropdown" class="context-dropdown hidden">
+                <div class="context-dropdown-item" id="contextAddActiveFile">📄 Active File</div>
+                <div class="context-dropdown-item" id="contextAddSelection">✂️ Selected Code</div>
+                <div class="context-dropdown-item" id="contextAddAllTabs">📂 All Open Tabs</div>
+              </div>
             </div>
             <div class="chat-actions-right">
               <button id="applyToFileBtn" class="composer-apply-btn" disabled title="Apply suggested code to file">Apply</button>
@@ -295,6 +357,7 @@
         <span id="statusLanguage" class="status-item">Plain Text</span>
         <span id="statusCursor" class="status-item">Ln 1, Col 1</span>
         <span id="statusEncoding" class="status-item">UTF-8</span>
+        <span id="statusSaveState" class="status-item clean">● Saved</span>
       </div>
       <div class="status-right">
         <span id="sidebarAgentStatusDot" class="status-dot ready"></span>
@@ -307,38 +370,156 @@
   <!-- Settings Modal -->
   <div id="settingsModal" class="modal hidden">
     <div class="modal-backdrop"></div>
-    <div class="modal-content">
+    <div class="modal-content settings-modal-content">
       <div class="modal-header">
         <h2>Settings</h2>
         <button id="closeSettingsBtn" class="ghost-btn">✕</button>
       </div>
-      <div class="modal-body">
-        <label class="control-label">
-          <span>Editor Theme</span>
-          <select id="themeSelect" class="control-select">
-            <option value="vs-dark">Dark (Default)</option>
-            <option value="vs-light">Light</option>
-            <option value="hc-black">High Contrast</option>
-          </select>
-        </label>
-        <label class="control-label">
-          <span>Font Size</span>
-          <select id="fontSizeSelect" class="control-select">
-            <option value="12">12px</option>
-            <option value="14" selected>14px</option>
-            <option value="16">16px</option>
-            <option value="18">18px</option>
-          </select>
-        </label>
-        <label class="control-label">
-          <span>Sidebar Width</span>
-          <select id="panelWidthSelect" class="control-select">
-            <option value="200">Narrow (200px)</option>
-            <option value="240" selected>Default (240px)</option>
-            <option value="300">Wide (300px)</option>
-            <option value="360">Extra Wide (360px)</option>
-          </select>
-        </label>
+      <div class="modal-body settings-modal-body">
+        <div class="settings-sidebar">
+          <button class="settings-tab-btn active" data-tab="appearance">Appearance</button>
+          <button class="settings-tab-btn" data-tab="editor">Editor</button>
+          <button class="settings-tab-btn" data-tab="ai-agent">AI Agent</button>
+          <button class="settings-tab-btn" data-tab="terminal">Terminal</button>
+        </div>
+        <div class="settings-panes">
+          <!-- Appearance Pane -->
+          <div class="settings-pane active" id="pane-appearance">
+            <label class="control-label">
+              <span>UI Theme</span>
+              <select id="uiThemeSelect" class="control-select">
+                <option value="catppuccin-mocha">Catppuccin Mocha (Dark)</option>
+                <option value="catppuccin-latte">Catppuccin Latte (Light)</option>
+                <option value="dracula">Dracula</option>
+                <option value="one-dark-pro">One Dark Pro</option>
+                <option value="nord">Nord</option>
+                <option value="solarized-dark">Solarized Dark</option>
+              </select>
+            </label>
+            <label class="control-label">
+              <span>Accent Color</span>
+              <div class="accent-color-picker-wrapper">
+                <input type="color" id="accentColorInput" class="accent-color-input" value="#a6e3a1" />
+                <span class="hint-text" style="margin-left: 8px;">Pick your color</span>
+              </div>
+            </label>
+            <label class="control-label">
+              <span>Editor Theme (Monaco)</span>
+              <select id="themeSelect" class="control-select">
+                <option value="vs-dark">Dark (Default)</option>
+                <option value="vs-light">Light</option>
+                <option value="hc-black">High Contrast</option>
+              </select>
+            </label>
+            <label class="control-label">
+              <span>Font Family</span>
+              <select id="fontFamilySelect" class="control-select">
+                <option value="Inter">Inter</option>
+                <option value="JetBrains Mono">JetBrains Mono</option>
+                <option value="Fira Code">Fira Code</option>
+                <option value="Courier New">Courier New</option>
+              </select>
+            </label>
+            <label class="control-label">
+              <span>Font Size</span>
+              <select id="fontSizeSelect" class="control-select">
+                <option value="12">12px</option>
+                <option value="14" selected>14px</option>
+                <option value="16">16px</option>
+                <option value="18">18px</option>
+              </select>
+            </label>
+          </div>
+          <!-- Editor Pane -->
+          <div class="settings-pane" id="pane-editor">
+            <label class="control-label">
+              <span>Tab Size</span>
+              <select id="tabSizeSelect" class="control-select">
+                <option value="2">2 spaces</option>
+                <option value="4" selected>4 spaces</option>
+                <option value="8">8 spaces</option>
+              </select>
+            </label>
+            <label class="control-label">
+              <span>Word Wrap</span>
+              <select id="wordWrapSelect" class="control-select">
+                <option value="off">Off</option>
+                <option value="on" selected>On</option>
+              </select>
+            </label>
+            <label class="control-label">
+              <span>Minimap</span>
+              <select id="minimapSelect" class="control-select">
+                <option value="false">Hidden</option>
+                <option value="true" selected>Shown</option>
+              </select>
+            </label>
+            <label class="control-label">
+              <span>Line Numbers</span>
+              <select id="lineNumbersSelect" class="control-select">
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+            <label class="control-label">
+              <span>Sidebar Width</span>
+              <select id="panelWidthSelect" class="control-select">
+                <option value="200">Narrow (200px)</option>
+                <option value="240" selected>Default (240px)</option>
+                <option value="300">Wide (300px)</option>
+                <option value="360">Extra Wide (360px)</option>
+              </select>
+            </label>
+          </div>
+          <!-- AI Agent Pane -->
+          <div class="settings-pane" id="pane-ai-agent">
+            <label class="control-label">
+              <span>Default Provider</span>
+              <select id="defaultProviderSelect" class="control-select">
+                <option value="pollinations">Pollinations (Free)</option>
+                <option value="openrouter">OpenRouter</option>
+              </select>
+            </label>
+            <label class="control-label">
+              <span>Default Model</span>
+              <select id="defaultModelSelect" class="control-select">
+                <option value="valkyrie">Valkyrie · Multi-Agent</option>
+                <option value="deepseek">DeepSeek R1</option>
+                <option value="qwen">Qwen 2.5 Coder</option>
+                <option value="llama">Llama 3.3 70B</option>
+                <option value="gemini">Gemini 2.5 Flash</option>
+              </select>
+            </label>
+            <label class="control-label">
+              <span>Temperature</span>
+              <div style="display: flex; align-items: center; gap: 12px; width: 100%;">
+                <input type="range" id="aiTemperatureInput" min="0" max="1" step="0.1" value="0.7" style="flex: 1;" />
+                <span id="aiTemperatureVal" style="color: var(--text); min-width: 24px; text-align: right;">0.7</span>
+              </div>
+            </label>
+          </div>
+          <!-- Terminal Pane -->
+          <div class="settings-pane" id="pane-terminal">
+            <label class="control-label">
+              <span>Terminal Font Size</span>
+              <select id="terminalFontSizeSelect" class="control-select">
+                <option value="11">11px</option>
+                <option value="12">12px</option>
+                <option value="13" selected>13px</option>
+                <option value="14">14px</option>
+                <option value="16">16px</option>
+              </select>
+            </label>
+            <label class="control-label">
+              <span>Terminal Theme / Background</span>
+              <select id="terminalThemeSelect" class="control-select">
+                <option value="match-ui">Match UI Theme (Default)</option>
+                <option value="pitch-black">Pitch Black (#000000)</option>
+                <option value="terminal-dark">Classic Dark (#0d0f14)</option>
+              </select>
+            </label>
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
         <button id="saveSettingsBtn" class="primary-btn">Save Settings</button>

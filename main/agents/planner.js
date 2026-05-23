@@ -73,82 +73,130 @@ CRITICAL: Return ONLY the raw JSON array. No other text, no markdown backticks, 
       ],
       model: "openai",
       seed: 42,
-      private: true
+      private: true,
+      stream: true
     });
     
     onThought("No API Key detected. Using free Pollinations fallback...\nThinking...");
     
-    const response = await fetch(apiURL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body
-    });
+    const maxRetries = 5;
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    let response;
+    let jsonBuffer = "";
+    let finalPlan = null;
     
-    if (!response.ok) {
-      throw new Error(`Pollinations free API error ${response.status}`);
-    }
-    
-    const resText = await response.text();
-    let resultText = "";
-    try {
-      const data = JSON.parse(resText);
-      const msg = data?.choices?.[0]?.message;
-      if (msg) {
-        resultText = msg.content || "";
-        const reasoning = msg.reasoning || "";
-        if (reasoning) {
-          onThought(reasoning);
-          if (!resultText) {
-            resultText = reasoning;
-          }
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const controller = new AbortController();
+      const initialTimeout = setTimeout(() => {
+        console.warn("[Planner] Pollinations initial request timed out.");
+        controller.abort();
+      }, 45000);
+      
+      try {
+        response = await fetch(apiURL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          signal: controller.signal
+        });
+        
+        clearTimeout(initialTimeout);
+        
+        if (!response.ok) {
+          throw new Error(`Pollinations free API error ${response.status}`);
         }
-      } else {
-        resultText = resText;
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let streamBuffer = "";
+        
+        const streamParser = new StreamParser(
+          (thoughtChunk) => {
+            onThought(thoughtChunk);
+          },
+          (contentChunk) => {
+            jsonBuffer += contentChunk;
+            const partialPlan = parsePartialJSONArray(jsonBuffer);
+            if (partialPlan && partialPlan.length > 0) {
+              onPlanReady(partialPlan, false);
+            }
+          }
+        );
+        
+        let heartbeatTimer = setTimeout(() => {
+          console.warn("[Planner] Pollinations stream stalled. Aborting.");
+          controller.abort();
+        }, 20000);
+        
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            clearTimeout(heartbeatTimer);
+            if (done) break;
+            
+            heartbeatTimer = setTimeout(() => {
+              console.warn("[Planner] Pollinations stream stalled. Aborting.");
+              controller.abort();
+            }, 20000);
+            
+            streamBuffer += decoder.decode(value, { stream: true });
+            
+            let lineIndex;
+            while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
+              const line = streamBuffer.slice(0, lineIndex).trim();
+              streamBuffer = streamBuffer.slice(lineIndex + 1);
+              
+              if (line.startsWith("data:")) {
+                const dataStr = line.slice(5).trim();
+                if (dataStr === "[DONE]") continue;
+                
+                try {
+                  const parsed = JSON.parse(dataStr);
+                  const text = parsed?.choices?.[0]?.delta?.content || parsed?.choices?.[0]?.delta?.reasoning || "";
+                  if (text) {
+                    streamParser.feed(text);
+                  }
+                } catch (e) {
+                  // Ignore JSON parse errors
+                }
+              }
+            }
+          }
+        } finally {
+          clearTimeout(heartbeatTimer);
+          try {
+            reader.releaseLock();
+          } catch (e) {}
+        }
+        
+        streamParser.flush();
+        
+        // Success! Final plan extraction:
+        finalPlan = parsePartialJSONArray(jsonBuffer);
+        break; // Success! Exit retry loop
+      } catch (err) {
+        clearTimeout(initialTimeout);
+        if (attempt === maxRetries) {
+          throw err;
+        }
+        const isRateLimitOrServerErr = err.message && (
+          err.message.includes("429") || 
+          err.message.includes("502") || 
+          err.message.includes("503") || 
+          err.message.includes("504") ||
+          err.message.includes("timeout") ||
+          err.message.includes("aborted")
+        );
+        const retryDelay = isRateLimitOrServerErr ? (attempt * 8000) : (attempt * 3000);
+        onThought(`\n[Planner Warning: Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying in ${retryDelay / 1000}s...]`);
+        await delay(retryDelay);
       }
-    } catch (e) {
-      resultText = resText;
     }
     
-    // Extract thought logs inside <think>...</think>
-    let thought = "";
-    const thinkMatch = resultText.match(/<think>([\s\S]*?)<\/think>/);
-    if (thinkMatch) {
-      thought = thinkMatch[1].trim();
-      onThought(thought);
-      resultText = resultText.replace(/<think>[\s\S]*?<\/think>/, "").trim();
-    } else {
-      // If no think tag was found and we didn't output deep reasoning either, send completion notice
-      if (!resText.includes('"reasoning"')) {
-        onThought("Pollinations planning complete.");
-      }
-    }
-    
-    // Extract JSON payload using the new robust index matching
-    let parsedPlan = null;
-    const firstBracket = resultText.indexOf("[");
-    const lastBracket = resultText.lastIndexOf("]");
-    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
-      const jsonStr = resultText.slice(firstBracket, lastBracket + 1);
-      try {
-        parsedPlan = JSON.parse(jsonStr.trim());
-      } catch (e) {
-        parsedPlan = parsePartialJSONArray(jsonStr);
-      }
-    }
-
-    if (!parsedPlan || !Array.isArray(parsedPlan) || parsedPlan.length === 0) {
-      // Try parsing the entire resultText just in case it didn't use brackets
-      try {
-        parsedPlan = JSON.parse(resultText.trim());
-      } catch (e) {
-        parsedPlan = parsePartialJSONArray(resultText);
-      }
-    }
-    
-    if (!parsedPlan || !Array.isArray(parsedPlan) || parsedPlan.length === 0) {
+    if (!finalPlan || finalPlan.length === 0) {
       console.warn("Valkyrie Planner fallback parsing failed, synthesizing default task.");
       const activeFile = contextData.activeFilePath || "main.js";
-      parsedPlan = [
+      finalPlan = [
         {
           id: "task-1",
           description: userPrompt,
@@ -158,31 +206,44 @@ CRITICAL: Return ONLY the raw JSON array. No other text, no markdown backticks, 
       onThought("\n[Note: Planner JSON extraction was malformed. Auto-synthesized single-task execution plan to proceed.]");
     }
     
-    onPlanReady(parsedPlan, true);
-    return parsedPlan;
+    onPlanReady(finalPlan, true);
+    return finalPlan;
   }
 
   // Use DeepSeek R1 via OpenRouter
   const model = "deepseek/deepseek-r1:free"; // Default to free tier
   const apiURL = "https://openrouter.ai/api/v1/chat/completions";
 
-  const response = await fetch(apiURL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
-      "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE",
-      "X-Title": "Nova IDE"
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent }
-      ],
-      stream: true
-    })
-  });
+  const controller = new AbortController();
+  // 45s initial request timeout
+  const initialTimeout = setTimeout(() => {
+    console.warn("[Planner] Initial request timed out.");
+    controller.abort();
+  }, 45000);
+
+  let response;
+  try {
+    response = await fetch(apiURL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+        "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE",
+        "X-Title": "Nova IDE"
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent }
+        ],
+        stream: true
+      }),
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(initialTimeout);
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -209,33 +270,51 @@ CRITICAL: Return ONLY the raw JSON array. No other text, no markdown backticks, 
   );
 
   let streamBuffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  let heartbeatTimer = setTimeout(() => {
+    console.warn("[Planner] Stream stalled (no chunk received for 20 seconds). Aborting.");
+    controller.abort();
+  }, 20000);
 
-    streamBuffer += decoder.decode(value, { stream: true });
-    
-    let lineIndex;
-    while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
-      const line = streamBuffer.slice(0, lineIndex).trim();
-      streamBuffer = streamBuffer.slice(lineIndex + 1);
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      clearTimeout(heartbeatTimer);
+      if (done) break;
+
+      heartbeatTimer = setTimeout(() => {
+        console.warn("[Planner] Stream stalled (no chunk received for 20 seconds). Aborting.");
+        controller.abort();
+      }, 20000);
+
+      streamBuffer += decoder.decode(value, { stream: true });
       
-      if (line.startsWith("data:")) {
-        const dataStr = line.slice(5).trim();
-        if (dataStr === "[DONE]") continue;
+      let lineIndex;
+      while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
+        const line = streamBuffer.slice(0, lineIndex).trim();
+        streamBuffer = streamBuffer.slice(lineIndex + 1);
+        
+        if (line.startsWith("data:")) {
+          const dataStr = line.slice(5).trim();
+          if (dataStr === "[DONE]") continue;
 
-        try {
-          const parsed = JSON.parse(dataStr);
-          const text = parsed?.choices?.[0]?.delta?.content || "";
-          if (text) {
-            fullContent += text;
-            streamParser.feed(text);
+          try {
+            const parsed = JSON.parse(dataStr);
+            const text = parsed?.choices?.[0]?.delta?.content || "";
+            if (text) {
+              fullContent += text;
+              streamParser.feed(text);
+            }
+          } catch (e) {
+            // Ignore JSON error
           }
-        } catch (e) {
-          // Ignore JSON error
         }
       }
     }
+  } finally {
+    clearTimeout(heartbeatTimer);
+    try {
+      reader.releaseLock();
+    } catch (e) {}
   }
 
   streamParser.flush();
