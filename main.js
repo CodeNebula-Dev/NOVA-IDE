@@ -238,6 +238,28 @@ ipcMain.handle("fs:create-folder", async (_event, relativePath) => {
   return true;
 });
 
+ipcMain.handle("fs:rename", async (_event, oldRelativePath, newRelativePath) => {
+  const oldNormalized = normalizeRelativePath(oldRelativePath);
+  const newNormalized = normalizeRelativePath(newRelativePath);
+  if (!oldNormalized || !newNormalized) {
+    throw new Error("Source and target paths are required.");
+  }
+  const oldAbsPath = resolveInWorkspace(oldNormalized);
+  const newAbsPath = resolveInWorkspace(newNormalized);
+  await fs.rename(oldAbsPath, newAbsPath);
+  return true;
+});
+
+ipcMain.handle("fs:delete", async (_event, relativePath) => {
+  const normalizedPath = normalizeRelativePath(relativePath);
+  if (!normalizedPath) {
+    throw new Error("Path is required for deletion.");
+  }
+  const absolutePath = resolveInWorkspace(normalizedPath);
+  await fs.rm(absolutePath, { recursive: true, force: true });
+  return true;
+});
+
 // Native Terminal handlers using node-pty
 ipcMain.handle("terminal:create", (event, cols, rows) => {
   const shell = process.env.SHELL || (os.platform() === "win32" ? "powershell.exe" : "zsh");

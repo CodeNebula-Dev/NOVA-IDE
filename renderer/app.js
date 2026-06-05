@@ -127,7 +127,9 @@ const state = {
   editor: null, // Monaco editor instance reference
   currentConversationId: null,
   conversations: [],
-  chatContexts: []
+  chatContexts: [],
+  terminals: [],
+  activeTerminalId: null
 };
 
 const saveTimers = new Map();
@@ -219,11 +221,24 @@ const els = {
 // Monaco AMD setup
 require.config({ paths: { vs: "../node_modules/monaco-editor/min/vs" } });
 
-init().catch((error) => {
-  addChatMessage("system", `Startup error: ${error.message}`);
-});
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
+    init().catch((error) => {
+      addChatMessage("system", `Startup error: ${error.message}`);
+    });
+  });
+} else {
+  init().catch((error) => {
+    addChatMessage("system", `Startup error: ${error.message}`);
+  });
+}
 
 async function init() {
+  // Load persisted panel sizes before first render
+  if (typeof loadPersistedPanelSizes === 'function') {
+    loadPersistedPanelSizes();
+  }
+
   renderModelOptions();
   bindEvents();
   syncAgentModeUI();
@@ -364,70 +379,32 @@ function initMonaco() {
         }
       });
 
+      // Append Monaco editor actions to the Command Palette registry
+      if (typeof COMMAND_REGISTRY !== 'undefined' && state.editor) {
+        const monacoActions = state.editor.getActions();
+        monacoActions.forEach(action => {
+          // Avoid duplicates if already registered
+          if (!COMMAND_REGISTRY.find(c => c.id === action.id)) {
+            COMMAND_REGISTRY.push({
+              id: action.id,
+              label: action.label,
+              action: () => action.run()
+            });
+          }
+        });
+      }
+
       renderChatMessages();
       resolve();
     });
   });
 }
 
-/**
- * Initializes the real terminal using node-pty and xterm.js
- */
 async function initTerminal() {
-  if (activeTerminal) return;
-
-  const term = new Terminal({
-    cursorBlink: true,
-    theme: {
-      background: "#0a0d13",
-      foreground: "#b9caf3",
-      cursor: "#7c6aff",
-      selectionBackground: "#242b3d"
-    },
-    fontFamily: '"JetBrains Mono", monospace',
-    fontSize: 13,
-    lineHeight: 1.2
-  });
-
-  const fit = new FitAddon.FitAddon();
-  term.loadAddon(fit);
-  term.open(els.xtermTerminalContainer);
-  fit.fit();
-
-  try {
-    // Spawn back-end shell via IPC
-    const termId = await window.novaAPI.terminalCreate(term.cols, term.rows);
-
-    // Keystrokes -> Native Shell
-    term.onData((data) => {
-      window.novaAPI.terminalInput(termId, data);
-    });
-
-    // Native Shell -> Keystrokes
-    const removeDataListener = window.novaAPI.onTerminalData(termId, (data) => {
-      term.write(data);
-    });
-
-    const removeExitListener = window.novaAPI.onTerminalExit(termId, () => {
-      term.write("\r\n\x1b[31m[Nova Terminal Session Closed]\x1b[0m\r\n");
-      activeTerminal = null;
-    });
-
-    activeTerminal = {
-      term,
-      fit,
-      termId,
-      dispose: () => {
-        removeDataListener();
-        removeExitListener();
-        term.dispose();
-      }
-    };
-
-    // Keep size synchronous
-    window.addEventListener("resize", handleTerminalResize);
-  } catch (error) {
-    term.write(`\r\n\x1b[31mFailed to start native shell: ${error.message}\x1b[0m\r\n`);
+  if (state.terminals.length === 0) {
+    await createTerminalInstance();
+  } else if (state.activeTerminalId) {
+    activateTerminalInstance(state.activeTerminalId);
   }
 }
 
@@ -478,6 +455,10 @@ function initResizableHandles() {
         document.body.style.userSelect = '';
         // Trigger Monaco layout update
         if (state.editor) state.editor.layout();
+        // Persist the new sidebar width
+        if (typeof savePanelSize === 'function') {
+          savePanelSize('sidebar', parseInt(sidebar.style.width, 10));
+        }
       }
     });
   }
@@ -518,6 +499,10 @@ function initResizableHandles() {
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
         if (state.editor) state.editor.layout();
+        // Persist the new AI panel width
+        if (typeof savePanelSize === 'function') {
+          savePanelSize('aiPanel', parseInt(aiPanel.style.width, 10));
+        }
       }
     });
   }
@@ -558,6 +543,10 @@ function initResizableHandles() {
         document.body.style.userSelect = '';
         handleTerminalResize();
         if (state.editor) state.editor.layout();
+        // Persist the new terminal height
+        if (typeof savePanelSize === 'function') {
+          savePanelSize('terminal', parseInt(termPanel.style.height, 10));
+        }
       }
     });
   }
@@ -854,6 +843,34 @@ function bindEvents() {
     hideDiffEditor();
     addChatMessage("system", "❌ Proposed changes rejected. Files on disk were not altered.");
   });
+
+  // Onboarding Guided Tour
+  const startTourBtn = document.getElementById("startTourBtn");
+  if (startTourBtn) {
+    startTourBtn.addEventListener("click", startOnboardingTour);
+  }
+  const onboardingNextBtn = document.getElementById("onboardingNextBtn");
+  if (onboardingNextBtn) {
+    onboardingNextBtn.addEventListener("click", nextTourStep);
+  }
+  const onboardingSkipBtn = document.getElementById("onboardingSkipBtn");
+  if (onboardingSkipBtn) {
+    onboardingSkipBtn.addEventListener("click", endOnboardingTour);
+  }
+
+  // Terminal Add Button
+  const addTerminalBtn = document.getElementById("addTerminalBtn");
+  if (addTerminalBtn) {
+    addTerminalBtn.addEventListener("click", () => {
+      createTerminalInstance();
+    });
+  }
+
+  // Git status bar branch click quick-pick
+  const statusGitBranch = document.getElementById("statusGitBranch");
+  if (statusGitBranch) {
+    statusGitBranch.addEventListener("click", showGitBranchQuickPick);
+  }
 }
 
 function addActiveFileContext() {
@@ -955,7 +972,12 @@ function renderContextChips() {
 }
 
 function showToastNotification(msg) {
-  addChatMessage("system", msg);
+  // Route through ToastSystem if available, else fall back to chat
+  if (typeof showToast === 'function') {
+    showToast(msg, 'info');
+  } else {
+    addChatMessage("system", msg);
+  }
 }
 
 function getSelectedEditorText() {
@@ -1040,12 +1062,20 @@ async function handleSelectWorkspace() {
     state.activePath = null;
     state.selectedPath = "";
     
-    // Dispose terminal to reset root
-    if (activeTerminal) {
-      activeTerminal.dispose();
+    // Dispose all terminals to reset root
+    if (state.terminals && state.terminals.length > 0) {
+      state.terminals.forEach((termInstance) => {
+        try {
+          termInstance.dispose();
+        } catch (e) {
+          console.error(e);
+        }
+      });
+      state.terminals = [];
+      state.activeTerminalId = null;
       activeTerminal = null;
-      window.removeEventListener("resize", handleTerminalResize);
     }
+    renderTerminalTabs();
 
     hideWelcomeScreen();
     clearEditor();
@@ -1061,7 +1091,14 @@ async function handleSelectWorkspace() {
  */
 function showWelcomeScreen() {
   const ws = document.getElementById('welcomeScreen');
-  if (ws) ws.classList.remove('hidden');
+  if (ws) {
+    ws.classList.remove('hidden');
+    ws.classList.remove('fade-out');
+    ws.classList.add('fade-in');
+    
+    // Trigger the sequenced typing intro log animation
+    animateWelcomeIntroLogText();
+  }
   if (els.tabsBar) {
     const empty = document.createElement('div');
     empty.className = 'tab-empty';
@@ -1073,7 +1110,28 @@ function showWelcomeScreen() {
 
 function hideWelcomeScreen() {
   const ws = document.getElementById('welcomeScreen');
-  if (ws) ws.classList.add('hidden');
+  if (!ws) return;
+
+  // Clear welcome typing timer if active
+  if (window.welcomeTypingTimer) {
+    clearInterval(window.welcomeTypingTimer);
+    window.welcomeTypingTimer = null;
+  }
+
+  // Swap fade-in → fade-out, then hide after animation completes
+  ws.classList.remove('fade-in');
+  ws.classList.add('fade-out');
+  ws.addEventListener('animationend', () => {
+    ws.classList.add('hidden');
+    ws.classList.remove('fade-out');
+  }, { once: true });
+  // Fallback: hide after 300ms if animationend doesn't fire
+  setTimeout(() => {
+    if (!ws.classList.contains('hidden')) {
+      ws.classList.add('hidden');
+      ws.classList.remove('fade-out');
+    }
+  }, 300);
 }
 
 async function refreshWorkspaceTree() {
@@ -1119,12 +1177,18 @@ function renderFileTree() {
   }
 
   els.fileTree.appendChild(rootList);
+
+  // Re-initialize keyboard navigation for dynamically rendered tree rows
+  if (typeof KeyboardNav !== 'undefined' && KeyboardNav.initFileTreeArrows) {
+    KeyboardNav.initFileTreeArrows();
+  }
 }
 
 function renderTreeNode(node, depth) {
   const li = document.createElement("li");
   const row = document.createElement("div");
   row.className = "tree-row";
+  row.setAttribute('tabindex', '0');
   row.style.paddingLeft = `${8 + depth * 14}px`;
 
   const caret = document.createElement("span");
@@ -1174,6 +1238,35 @@ function renderTreeNode(node, depth) {
     await openFile(node.path);
   });
 
+  // Context menu for file tree rows
+  row.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof ContextMenu === 'undefined') return;
+
+    let items;
+    if (node.type === 'file') {
+      items = [
+        { label: 'Open', action: () => openFile(node.path) },
+        { label: 'Rename', action: () => handleRenameNode(node) },
+        { label: 'Delete', action: () => handleDeleteNode(node) },
+        { separator: true },
+        { label: 'Copy Path', action: () => { navigator.clipboard.writeText(node.path); showToastNotification('Path copied to clipboard'); } }
+      ];
+    } else {
+      items = [
+        { label: 'New File', action: () => handleCreateFileInFolder(node.path) },
+        { label: 'New Folder', action: () => handleCreateFolderInFolder(node.path) },
+        { separator: true },
+        { label: 'Rename', action: () => handleRenameNode(node) },
+        { label: 'Delete', action: () => handleDeleteNode(node) },
+        { separator: true },
+        { label: 'Copy Path', action: () => { navigator.clipboard.writeText(node.path); showToastNotification('Path copied to clipboard'); } }
+      ];
+    }
+    ContextMenu.show(e.clientX, e.clientY, items);
+  });
+
   row.append(caret, icon, name);
   li.appendChild(row);
 
@@ -1192,9 +1285,9 @@ function renderTreeNode(node, depth) {
 
 function getNodeIcon(node) {
   if (node.type === "folder") {
-    return state.expandedFolders.has(node.path) ? (window.NOVA_ICONS.folderOpen || "📁") : (window.NOVA_ICONS.folder || "📁");
+    return state.expandedFolders.has(node.path) ? (window.NOVA_ICONS?.folderOpen || "") : (window.NOVA_ICONS?.folder || "");
   }
-  return window.getFileIcon ? window.getFileIcon(node.name) : "📄";
+  return window.getFileIcon ? window.getFileIcon(node.name) : (window.NOVA_ICONS?.file || "");
 }
 
 function getExtension(fileName = "") {
@@ -1229,16 +1322,18 @@ function renderTabs() {
     }
 
     const fileName = tab.path.split("/").pop();
-    const tabIcon = document.createElement("span");
-    tabIcon.className = "tab-icon";
-    tabIcon.innerHTML = window.getFileIcon ? window.getFileIcon(fileName) : "📄";
 
     const title = document.createElement("span");
+    title.className = "tab-title";
     title.textContent = fileName;
 
+    const iconSpan = document.createElement("span");
+    iconSpan.className = "tab-file-icon";
+    iconSpan.innerHTML = window.getFileIcon ? window.getFileIcon(fileName) : "";
+
     const closeBtn = document.createElement("button");
-    closeBtn.className = "close";
-    closeBtn.textContent = "×";
+    closeBtn.className = "tab-close";
+    closeBtn.innerHTML = window.NOVA_ICONS?.close || "×";
     closeBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       closeTab(tab.path);
@@ -1248,7 +1343,23 @@ function renderTabs() {
       activateTab(tab.path);
     });
 
-    tabButton.append(tabIcon, title, closeBtn);
+    // Context menu for tabs
+    tabButton.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof ContextMenu === 'undefined') return;
+
+      const items = [
+        { label: 'Close Tab', action: () => closeTab(tab.path) },
+        { label: 'Close Other Tabs', action: () => closeOtherTabs(tab.path) },
+        { label: 'Close All Tabs', action: () => closeAllTabs() },
+        { separator: true },
+        { label: 'Copy File Path', action: () => { navigator.clipboard.writeText(tab.path); showToastNotification('Path copied to clipboard'); } }
+      ];
+      ContextMenu.show(e.clientX, e.clientY, items);
+    });
+
+    tabButton.append(iconSpan, title, closeBtn);
     els.tabsBar.appendChild(tabButton);
   }
 }
@@ -1265,6 +1376,8 @@ function activateTab(path) {
   renderFileTree();
   updateContextLabel();
   updateApplyButtonState();
+  renderBreadcrumbs();
+  renderOutline();
 }
 
 function createMonacoUri(pathStr) {
@@ -1315,6 +1428,8 @@ function closeTab(path) {
   renderFileTree();
   updateContextLabel();
   updateApplyButtonState();
+  renderBreadcrumbs();
+  renderOutline();
 }
 
 async function openFile(filePath) {
@@ -1343,6 +1458,8 @@ async function openFile(filePath) {
     renderFileTree();
     updateContextLabel();
     updateApplyButtonState();
+    renderBreadcrumbs();
+    renderOutline();
   } catch (error) {
     addChatMessage("system", `Failed to open ${normalizedPath}: ${error.message}`);
   }
@@ -1353,6 +1470,8 @@ function clearEditor() {
     state.editor.setValue("");
   }
   updateStatusBar();
+  renderBreadcrumbs();
+  renderOutline();
 }
 
 /**
@@ -1401,6 +1520,7 @@ function handleEditorInput() {
     activeTab.dirty = true;
     scheduleSave(activeTab.path, content);
     renderTabs();
+    renderOutline();
   }
   updateStatusBar();
 }
@@ -1535,6 +1655,143 @@ async function handleCreateFolder() {
     addChatMessage("system", `✅ Created folder: ${folderPath}`);
   } catch (error) {
     addChatMessage("system", `❌ Could not create folder: ${error.message}`);
+  }
+}
+
+function closeOtherTabs(path) {
+  const keepTab = state.tabs.find((tab) => tab.path === path);
+  if (!keepTab) return;
+
+  state.tabs.forEach((tab) => {
+    if (tab.path !== path) {
+      const fileUri = createMonacoUri(tab.path);
+      const model = monaco.editor.getModel(fileUri);
+      if (model) model.dispose();
+    }
+  });
+
+  state.tabs = [keepTab];
+  state.activePath = path;
+  setEditorContent(keepTab.content, keepTab.path);
+
+  renderTabs();
+  renderFileTree();
+  updateContextLabel();
+  updateApplyButtonState();
+}
+
+function closeAllTabs() {
+  state.tabs.forEach((tab) => {
+    const fileUri = createMonacoUri(tab.path);
+    const model = monaco.editor.getModel(fileUri);
+    if (model) model.dispose();
+  });
+
+  state.tabs = [];
+  state.activePath = null;
+  clearEditor();
+
+  renderTabs();
+  renderFileTree();
+  updateContextLabel();
+  updateApplyButtonState();
+}
+
+async function handleCreateFileInFolder(folderPath) {
+  const suggestion = folderPath ? `${folderPath}/` : "";
+  const rawPath = window.prompt("New file path:", suggestion);
+  if (!rawPath || !rawPath.trim()) return;
+  const filePath = normalizePath(rawPath.trim());
+  if (!filePath) return;
+  try {
+    await window.novaAPI.createFile(filePath);
+    await refreshWorkspaceTree();
+    await openFile(filePath);
+    showToastNotification(`✅ Created file: ${filePath}`);
+  } catch (error) {
+    showToastNotification(`❌ Could not create file: ${error.message}`);
+  }
+}
+
+async function handleCreateFolderInFolder(folderPath) {
+  const suggestion = folderPath ? `${folderPath}/` : "";
+  const rawPath = window.prompt("New folder path:", suggestion);
+  if (!rawPath || !rawPath.trim()) return;
+  const targetFolderPath = normalizePath(rawPath.trim());
+  if (!targetFolderPath) return;
+  try {
+    await window.novaAPI.createFolder(targetFolderPath);
+    state.expandedFolders.add(targetFolderPath);
+    await refreshWorkspaceTree();
+    showToastNotification(`✅ Created folder: ${targetFolderPath}`);
+  } catch (error) {
+    showToastNotification(`❌ Could not create folder: ${error.message}`);
+  }
+}
+
+async function handleRenameNode(node) {
+  const newName = window.prompt(`Rename ${node.type}:`, node.name);
+  if (!newName || !newName.trim() || newName.trim() === node.name) return;
+
+  const parts = node.path.split('/');
+  parts.pop();
+  parts.push(newName.trim());
+  const newPath = parts.join('/');
+
+  try {
+    await window.novaAPI.renameNode(node.path, newPath);
+    
+    // For any tabs that are affected by this rename, dispose model and rename tab
+    state.tabs.forEach(tab => {
+      if (tab.path === node.path || tab.path.startsWith(node.path + '/')) {
+        const oldUri = createMonacoUri(tab.path);
+        const oldModel = monaco.editor.getModel(oldUri);
+        if (oldModel) oldModel.dispose();
+
+        let newTabPath = newPath;
+        if (tab.path.startsWith(node.path + '/')) {
+          newTabPath = newPath + tab.path.slice(node.path.length);
+        }
+        tab.path = newTabPath;
+      }
+    });
+
+    if (state.activePath === node.path) {
+      state.activePath = newPath;
+    } else if (state.activePath && state.activePath.startsWith(node.path + '/')) {
+      state.activePath = newPath + state.activePath.slice(node.path.length);
+    }
+
+    if (state.activePath) {
+      const activeTab = state.tabs.find(t => t.path === state.activePath);
+      if (activeTab) {
+        setEditorContent(activeTab.content, activeTab.path);
+      }
+    }
+
+    await refreshWorkspaceTree();
+    renderTabs();
+    showToastNotification(`✅ Renamed ${node.type} to ${newName}`);
+  } catch (error) {
+    showToastNotification(`❌ Could not rename ${node.type}: ${error.message}`);
+  }
+}
+
+async function handleDeleteNode(node) {
+  const confirm = window.confirm(`Are you sure you want to delete this ${node.type} and all its contents?`);
+  if (!confirm) return;
+
+  try {
+    await window.novaAPI.deleteNode(node.path);
+    // Close tab(s)
+    const tabsToClose = state.tabs.filter(t => t.path === node.path || t.path.startsWith(node.path + '/'));
+    tabsToClose.forEach(t => {
+      closeTab(t.path);
+    });
+    await refreshWorkspaceTree();
+    showToastNotification(`✅ Deleted ${node.type}: ${node.path}`);
+  } catch (error) {
+    showToastNotification(`❌ Could not delete: ${error.message}`);
   }
 }
 
@@ -2639,6 +2896,11 @@ function saveSettings() {
   
   els.settingsModal.classList.add("hidden");
   addChatMessage("system", "Settings saved successfully.");
+  
+  // Clear unsaved indicator
+  if (typeof SettingsLivePreview !== 'undefined') {
+    SettingsLivePreview.clearSettingsDirty();
+  }
 }
 
 function applyUITheme(uiTheme) {
@@ -3727,6 +3989,17 @@ function renderGitBranches(branchOutput) {
     opt.selected = b.isCurrent;
     gitBranchSelect.appendChild(opt);
   });
+
+  // Update status bar Git branch text
+  const statusGitBranch = document.getElementById("statusGitBranch");
+  if (statusGitBranch) {
+    if (activeBranch) {
+      statusGitBranch.classList.remove("hidden");
+      statusGitBranch.textContent = `git: ${activeBranch}`;
+    } else {
+      statusGitBranch.classList.add("hidden");
+    }
+  }
 }
 
 function renderGitChanges(statusOutput) {
@@ -3792,6 +4065,12 @@ function renderGitChanges(statusOutput) {
     unstagedFiles.forEach(file => {
       gitChangesList.appendChild(createGitFileItem(file));
     });
+  }
+
+  // Update git badge on activity bar
+  const allChangedFiles = [...stagedFiles, ...unstagedFiles];
+  if (typeof updateGitBadge === 'function') {
+    updateGitBadge(allChangedFiles.length);
   }
 }
 
@@ -3993,4 +4272,660 @@ async function handleGitCommit() {
     }
   }
 }
+
+// ==================== NEW: WELCOME SEQ, ONBOARDING, BREADCRUMBS, OUTLINE, TABBED TERMINALS & GIT BRANCH SWITCHING ====================
+
+function animateWelcomeIntroLogText() {
+  const logText = document.getElementById('welcomeIntroLogText');
+  if (!logText) return;
+  
+  const text = "Welcome to Nova IDE — AI-agent-first workspace. Type ⌘P to explore.";
+  logText.textContent = "";
+  
+  if (window.welcomeTypingTimer) {
+    clearInterval(window.welcomeTypingTimer);
+  }
+  
+  setTimeout(() => {
+    let index = 0;
+    logText.textContent = "";
+    window.welcomeTypingTimer = setInterval(() => {
+      if (index < text.length) {
+        logText.textContent += text.charAt(index);
+        index++;
+      } else {
+        clearInterval(window.welcomeTypingTimer);
+        window.welcomeTypingTimer = null;
+      }
+    }, 40);
+  }, 600);
+}
+
+const TOUR_STEPS = [
+  {
+    selector: '.activity-bar',
+    content: 'The Navigation bar lets you switch between the File Explorer, Git status, Terminal settings, and more. All using elegant typographic text labels instead of icons.'
+  },
+  {
+    selector: '#explorerPanel',
+    content: 'The Workspace Explorer displays your project folder structure and the new Outline panel, showing all your code symbols (functions, classes) for easy navigation.'
+  },
+  {
+    selector: '#monacoEditorContainer',
+    content: 'Edit code in Monaco Editor. Use the dynamic breadcrumbs at the top to navigate file path segments and switch files seamlessly.'
+  },
+  {
+    selector: '#aiPanel',
+    content: 'The Nova AI Agent Panel provides contextual assistance. Choose between multiple LLMs (Valkyrie, DeepSeek R1, Qwen) to co-author or edit code in real-time.'
+  },
+  {
+    selector: '#terminalPanel',
+    content: 'Run and manage processes using the multi-terminal tabbed bar. Spawn multiple terminals and toggle between tabs instantly.'
+  }
+];
+
+let currentTourStep = 0;
+let terminalWasHiddenBeforeTour = false;
+
+function startOnboardingTour() {
+  console.log("🚀 startOnboardingTour called");
+  currentTourStep = 0;
+  terminalWasHiddenBeforeTour = !state.terminalVisible;
+  
+  const overlay = document.getElementById('onboardingOverlay');
+  if (overlay) {
+    overlay.classList.remove('hidden');
+    overlay.style.opacity = '1';
+  }
+  
+  showTourStep(0);
+}
+
+function showTourStep(stepIndex) {
+  console.log("📋 showTourStep called with index:", stepIndex);
+  currentTourStep = stepIndex;
+  const step = TOUR_STEPS[stepIndex];
+  
+  if (step.selector === '#terminalPanel' && !state.terminalVisible) {
+    state.terminalVisible = true;
+    els.terminalPanel.classList.remove("hidden");
+    if (state.terminals.length === 0) {
+      createTerminalInstance();
+    }
+  }
+
+  const contentEl = document.getElementById('onboardingContent');
+  if (contentEl) {
+    contentEl.innerHTML = `<div style="font-weight: 700; margin-bottom: 6px; color: var(--accent);">Step ${stepIndex + 1} of ${TOUR_STEPS.length}</div>` + step.content;
+  }
+
+  const nextBtn = document.getElementById('onboardingNextBtn');
+  if (nextBtn) {
+    nextBtn.textContent = stepIndex === TOUR_STEPS.length - 1 ? 'Finish' : 'Next';
+  }
+
+  setTimeout(() => {
+    positionHighlight(step.selector);
+  }, 100);
+}
+
+function nextTourStep() {
+  console.log("➡️ nextTourStep clicked. Current:", currentTourStep);
+  if (currentTourStep < TOUR_STEPS.length - 1) {
+    showTourStep(currentTourStep + 1);
+  } else {
+    endOnboardingTour();
+  }
+}
+
+function endOnboardingTour() {
+  const overlay = document.getElementById('onboardingOverlay');
+  if (overlay) {
+    overlay.classList.add('hidden');
+    overlay.style.opacity = '0';
+  }
+
+  if (terminalWasHiddenBeforeTour && state.terminalVisible) {
+    state.terminalVisible = false;
+    els.terminalPanel.classList.add("hidden");
+  }
+}
+
+function positionHighlight(selector) {
+  const overlay = document.getElementById('onboardingOverlay');
+  const highlight = document.getElementById('onboardingHighlight');
+  const tooltip = document.getElementById('onboardingTooltip');
+  const target = document.querySelector(selector);
+  
+  if (!target || !overlay || !highlight || !tooltip) return;
+
+  const rect = target.getBoundingClientRect();
+  
+  highlight.style.top = `${rect.top}px`;
+  highlight.style.left = `${rect.left}px`;
+  highlight.style.width = `${rect.width}px`;
+  highlight.style.height = `${rect.height}px`;
+
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const padding = 12;
+
+  let tooltipLeft = rect.left + rect.width / 2 - tooltipRect.width / 2;
+  let tooltipTop = rect.bottom + padding;
+
+  if (tooltipTop + tooltipRect.height > window.innerHeight) {
+    tooltipTop = rect.top - tooltipRect.height - padding;
+  }
+  if (tooltipLeft + tooltipRect.width > window.innerWidth) {
+    tooltipLeft = window.innerWidth - tooltipRect.width - padding;
+  }
+  if (tooltipLeft < 0) {
+    tooltipLeft = padding;
+  }
+
+  if (selector === '.activity-bar') {
+    tooltipLeft = rect.right + padding;
+    tooltipTop = rect.top + padding;
+  } else if (selector === '#explorerPanel') {
+    tooltipLeft = rect.right + padding;
+    tooltipTop = rect.top + padding;
+  } else if (selector === '#aiPanel') {
+    tooltipLeft = rect.left - tooltipRect.width - padding;
+    tooltipTop = rect.top + padding;
+  } else if (selector === '#terminalPanel') {
+    tooltipLeft = rect.left + padding;
+    tooltipTop = rect.top - tooltipRect.height - padding;
+  }
+
+  tooltip.style.left = `${tooltipLeft}px`;
+  tooltip.style.top = `${tooltipTop}px`;
+}
+
+function findNodeByPath(rootNode, targetPath) {
+  if (!rootNode) return null;
+  const normalize = p => p.replace(/\\/g, '/').replace(/\/$/, '');
+  const normTarget = normalize(targetPath);
+  const normRoot = normalize(rootNode.path || '');
+  
+  if (normRoot === normTarget) {
+    return rootNode;
+  }
+  
+  if (rootNode.children) {
+    for (const child of rootNode.children) {
+      const found = findNodeByPath(child, targetPath);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function renderBreadcrumbs() {
+  const container = document.getElementById('breadcrumbs');
+  if (!container) return;
+
+  if (!state.activePath || !state.workspaceRoot) {
+    container.innerHTML = '';
+    return;
+  }
+
+  const workspaceRoot = state.workspaceRoot.replace(/\\/g, '/');
+  const activePath = state.activePath.replace(/\\/g, '/');
+
+  if (!activePath.startsWith(workspaceRoot)) {
+    const fileName = activePath.split('/').pop() || activePath;
+    container.innerHTML = `<span class="breadcrumb-item active" data-path="${activePath}">${fileName}</span>`;
+    return;
+  }
+
+  const relativePath = activePath.substring(workspaceRoot.length).replace(/^\//, '');
+  const parts = relativePath ? relativePath.split('/') : [];
+  
+  const rootName = workspaceRoot.split('/').pop() || 'Root';
+  let segments = [{ name: rootName, path: workspaceRoot }];
+  
+  let currentAccumulatedPath = workspaceRoot;
+  for (let i = 0; i < parts.length; i++) {
+    currentAccumulatedPath += '/' + parts[i];
+    segments.push({ name: parts[i], path: currentAccumulatedPath });
+  }
+
+  container.innerHTML = '';
+
+  segments.forEach((seg, idx) => {
+    if (idx > 0) {
+      const sep = document.createElement('span');
+      sep.className = 'breadcrumb-separator';
+      sep.textContent = '>';
+      container.appendChild(sep);
+    }
+
+    const item = document.createElement('span');
+    item.className = 'breadcrumb-item';
+    if (idx === segments.length - 1) {
+      item.classList.add('active');
+    }
+    item.textContent = seg.name;
+    item.title = seg.path;
+    
+    item.addEventListener('click', (e) => {
+      const pathToShow = (idx === segments.length - 1 && parts.length > 0)
+        ? segments[segments.length - 2].path
+        : seg.path;
+      showBreadcrumbMenu(e, pathToShow);
+    });
+
+    container.appendChild(item);
+  });
+}
+
+function showBreadcrumbMenu(event, dirPath) {
+  event.stopPropagation();
+  const existing = document.querySelector('.breadcrumb-dropdown');
+  if (existing) existing.remove();
+
+  const dirNode = findNodeByPath(state.tree, dirPath);
+  if (!dirNode || !dirNode.children || dirNode.children.length === 0) return;
+
+  const menu = document.createElement('div');
+  menu.className = 'breadcrumb-dropdown';
+  
+  const rect = event.currentTarget.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
+  menu.style.left = `${rect.left + window.scrollX}px`;
+
+  const sorted = [...dirNode.children].sort(compareNodes);
+
+  sorted.forEach(child => {
+    const item = document.createElement('div');
+    item.className = 'breadcrumb-dropdown-item';
+    const prefix = child.type === 'folder' ? '[DIR] ' : '';
+    item.textContent = prefix + child.name;
+    
+    item.addEventListener('click', async () => {
+      menu.remove();
+      if (child.type === 'file') {
+        await openFile(child.path);
+      } else if (child.type === 'folder') {
+        state.expandedFolders.add(child.path);
+        renderFileTree();
+      }
+    });
+    menu.appendChild(item);
+  });
+
+  document.body.appendChild(menu);
+
+  const closeHandler = () => {
+    menu.remove();
+    document.removeEventListener('click', closeHandler);
+  };
+  setTimeout(() => {
+    document.addEventListener('click', closeHandler);
+  }, 10);
+}
+
+function parseSymbols(content, filePath) {
+  if (!content) return [];
+  const ext = filePath.split('.').pop().toLowerCase();
+  const lines = content.split('\n');
+  const symbols = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const lineText = lines[i];
+    const indentMatch = lineText.match(/^(\s*)/);
+    const indent = indentMatch ? indentMatch[1].length : 0;
+    const trimmed = lineText.trim();
+
+    if (trimmed.startsWith('//') || trimmed.startsWith('#') || trimmed.startsWith('/*')) continue;
+
+    if (ext === 'py') {
+      const pyMatch = trimmed.match(/^(def|class)\s+([a-zA-Z0-9_]+)/);
+      if (pyMatch) {
+        const kind = pyMatch[1] === 'class' ? 'CLASS' : 'FUNC';
+        symbols.push({
+          name: pyMatch[2],
+          line: i + 1,
+          kind,
+          indent
+        });
+      }
+    } else if (ext === 'js' || ext === 'ts' || ext === 'jsx' || ext === 'tsx') {
+      let matched = false;
+      
+      const classMatch = trimmed.match(/^class\s+([a-zA-Z0-9_]+)/);
+      if (classMatch) {
+        symbols.push({ name: classMatch[1], line: i + 1, kind: 'CLASS', indent });
+        matched = true;
+      }
+      
+      if (!matched) {
+        const funcMatch = trimmed.match(/^(?:async\s+)?function\s+([a-zA-Z0-9_]+)/);
+        if (funcMatch) {
+          symbols.push({ name: funcMatch[1], line: i + 1, kind: 'FUNC', indent });
+          matched = true;
+        }
+      }
+
+      if (!matched) {
+        const arrowMatch = trimmed.match(/^(?:const|let|var)\s+([a-zA-Z0-9_]+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[a-zA-Z0-9_]+)\s*=>/);
+        if (arrowMatch) {
+          symbols.push({ name: arrowMatch[1], line: i + 1, kind: 'FUNC', indent });
+          matched = true;
+        }
+      }
+
+      if (!matched) {
+        const methodMatch = trimmed.match(/^(?:async\s+)?([a-zA-Z0-9_]+)\s*\([^)]*\)\s*\{/);
+        if (methodMatch && !['if', 'for', 'while', 'switch', 'catch', 'let', 'const', 'var', 'return'].includes(methodMatch[1])) {
+          symbols.push({ name: methodMatch[1], line: i + 1, kind: 'FUNC', indent });
+        }
+      }
+    }
+  }
+  return symbols;
+}
+
+function renderOutline() {
+  const container = document.getElementById('outlineTree');
+  if (!container) return;
+
+  if (!state.activePath || !state.editor) {
+    container.innerHTML = '<div class="outline-empty">No active document</div>';
+    return;
+  }
+
+  const content = state.editor.getValue();
+  const symbols = parseSymbols(content, state.activePath);
+
+  if (symbols.length === 0) {
+    container.innerHTML = '<div class="outline-empty">No symbols found</div>';
+    return;
+  }
+
+  container.innerHTML = '';
+  
+  symbols.forEach(sym => {
+    const li = document.createElement('div');
+    li.className = 'outline-node';
+    const basePadding = 6;
+    const indentMultiplier = 8;
+    const indentPadding = Math.min(sym.indent, 40) / 4 * indentMultiplier;
+    li.style.paddingLeft = `${basePadding + indentPadding}px`;
+    
+    const kindTag = document.createElement('span');
+    kindTag.className = sym.kind === 'CLASS' ? 'outline-kind-class' : 'outline-kind-func';
+    kindTag.textContent = sym.kind;
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'outline-label';
+    nameSpan.textContent = sym.name;
+
+    li.appendChild(kindTag);
+    li.appendChild(nameSpan);
+    
+    li.addEventListener('click', () => {
+      if (state.editor) {
+        state.editor.revealLineInCenter(sym.line);
+        state.editor.setPosition({ lineNumber: sym.line, column: 1 });
+        state.editor.focus();
+      }
+    });
+    container.appendChild(li);
+  });
+}
+
+async function createTerminalInstance() {
+  const termId = 'term-' + Date.now();
+  const index = state.terminals.length + 1;
+  const name = `bash (${index})`;
+
+  const term = new Terminal({
+    cursorBlink: true,
+    theme: {
+      background: "#0a0d13",
+      foreground: "#b9caf3",
+      cursor: "#7c6aff",
+      selectionBackground: "#242b3d"
+    },
+    fontFamily: '"JetBrains Mono", monospace',
+    fontSize: 13,
+    lineHeight: 1.2
+  });
+
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+
+  const termEl = document.createElement("div");
+  termEl.id = `terminal-container-${termId}`;
+  termEl.className = "terminal-instance-container";
+  termEl.style.width = "100%";
+  termEl.style.height = "100%";
+  termEl.style.display = "none";
+  
+  els.xtermTerminalContainer.appendChild(termEl);
+  term.open(termEl);
+  fit.fit();
+
+  try {
+    const backendId = await window.novaAPI.terminalCreate(term.cols, term.rows);
+
+    term.onData((data) => {
+      window.novaAPI.terminalInput(backendId, data);
+    });
+
+    const removeDataListener = window.novaAPI.onTerminalData(backendId, (data) => {
+      term.write(data);
+    });
+
+    const removeExitListener = window.novaAPI.onTerminalExit(backendId, () => {
+      term.write("\r\n\x1b[31m[Nova Terminal Session Closed]\x1b[0m\r\n");
+      closeTerminalInstance(termId);
+    });
+
+    const termInstance = {
+      id: termId,
+      name,
+      term,
+      fit,
+      termId: backendId,
+      element: termEl,
+      dispose: () => {
+        try { removeDataListener(); } catch (e) {}
+        try { removeExitListener(); } catch (e) {}
+        try { term.dispose(); } catch (e) {}
+        termEl.remove();
+      }
+    };
+
+    state.terminals.push(termInstance);
+    activateTerminalInstance(termId);
+  } catch (error) {
+    term.write(`\r\n\x1b[31mFailed to start native shell: ${error.message}\x1b[0m\r\n`);
+    termEl.remove();
+  }
+}
+
+function activateTerminalInstance(id) {
+  state.activeTerminalId = id;
+  
+  state.terminals.forEach((termInstance) => {
+    if (termInstance.id === id) {
+      termInstance.element.style.display = "block";
+      activeTerminal = termInstance;
+      
+      setTimeout(() => {
+        termInstance.fit.fit();
+        termInstance.term.focus();
+      }, 50);
+    } else {
+      termInstance.element.style.display = "none";
+    }
+  });
+
+  renderTerminalTabs();
+}
+
+function closeTerminalInstance(id) {
+  const index = state.terminals.findIndex((t) => t.id === id);
+  if (index === -1) return;
+
+  const closedInstance = state.terminals[index];
+  closedInstance.dispose();
+  state.terminals.splice(index, 1);
+
+  if (state.activeTerminalId === id) {
+    const fallback = state.terminals[index] || state.terminals[index - 1] || null;
+    if (fallback) {
+      activateTerminalInstance(fallback.id);
+    } else {
+      state.activeTerminalId = null;
+      activeTerminal = null;
+    }
+  }
+
+  renderTerminalTabs();
+}
+
+function renderTerminalTabs() {
+  const container = document.getElementById('terminalTabs');
+  if (!container) return;
+
+  container.innerHTML = '';
+  state.terminals.forEach((termInfo) => {
+    const tab = document.createElement('div');
+    tab.className = 'terminal-tab';
+    if (termInfo.id === state.activeTerminalId) {
+      tab.classList.add('active');
+    }
+
+    const label = document.createElement('span');
+    label.className = 'terminal-tab-label';
+    label.textContent = termInfo.name;
+
+    const closeBtn = document.createElement('span');
+    closeBtn.className = 'terminal-tab-close';
+    closeBtn.innerHTML = window.NOVA_ICONS?.close || '×';
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeTerminalInstance(termInfo.id);
+    });
+
+    tab.appendChild(label);
+    tab.appendChild(closeBtn);
+
+    tab.addEventListener('click', () => {
+      activateTerminalInstance(termInfo.id);
+    });
+
+    container.appendChild(tab);
+  });
+}
+
+async function showGitBranchQuickPick(event) {
+  event.stopPropagation();
+  const existing = document.querySelector('.git-branch-quickpick');
+  if (existing) existing.remove();
+
+  const branchRes = await window.novaAPI.git.getBranches();
+  if (!branchRes.success) {
+    alert("Failed to get branches: " + branchRes.error);
+    return;
+  }
+
+  const lines = branchRes.stdout.split("\n");
+  const branches = [];
+  let activeBranch = "";
+
+  for (let line of lines) {
+    line = line.trim();
+    if (!line) continue;
+    let isCurrent = false;
+    if (line.startsWith("*")) {
+      isCurrent = true;
+      line = line.substring(1).trim();
+    }
+    branches.push({ name: line, isCurrent });
+    if (isCurrent) activeBranch = line;
+  }
+
+  const picker = document.createElement('div');
+  picker.className = 'git-branch-quickpick';
+  
+  const rect = event.currentTarget.getBoundingClientRect();
+  picker.style.bottom = `${window.innerHeight - rect.top + 4}px`;
+  picker.style.left = `${rect.left}px`;
+
+  const header = document.createElement('div');
+  header.style.padding = '6px 12px';
+  header.style.fontWeight = '700';
+  header.style.fontSize = '10px';
+  header.style.color = 'var(--text-muted)';
+  header.style.textTransform = 'uppercase';
+  header.style.borderBottom = '1px solid var(--border)';
+  header.style.marginBottom = '4px';
+  header.textContent = 'Switch Branch';
+  picker.appendChild(header);
+
+  branches.forEach(b => {
+    const item = document.createElement('div');
+    item.className = 'quickpick-item';
+    item.style.color = b.isCurrent ? 'var(--accent)' : 'var(--text-secondary)';
+    item.style.fontWeight = b.isCurrent ? '700' : 'normal';
+    item.textContent = b.name + (b.isCurrent ? ' (current)' : '');
+
+    item.addEventListener('click', async () => {
+      picker.remove();
+      try {
+        const checkoutRes = await window.novaAPI.git.checkout(b.name);
+        if (checkoutRes.success) {
+          addChatMessage("system", `Checked out branch: ${b.name}`);
+          await refreshGitPanel();
+        } else {
+          addChatMessage("system", `Checkout failed: ${checkoutRes.error}`);
+        }
+      } catch (e) {
+        addChatMessage("system", `Error checking out branch: ${e.message}`);
+      }
+    });
+
+    picker.appendChild(item);
+  });
+
+  const createItem = document.createElement('div');
+  createItem.className = 'quickpick-item';
+  createItem.style.color = 'var(--green)';
+  createItem.style.borderTop = '1px solid var(--border)';
+  createItem.style.marginTop = '4px';
+  createItem.textContent = '+ Create New Branch...';
+
+  createItem.addEventListener('click', async () => {
+    picker.remove();
+    const newBranchName = prompt("Enter new branch name:");
+    if (newBranchName && newBranchName.trim()) {
+      try {
+        const createRes = await window.novaAPI.git.createBranch(newBranchName.trim());
+        if (createRes.success) {
+          addChatMessage("system", `Created branch: ${newBranchName}`);
+          await refreshGitPanel();
+        } else {
+          addChatMessage("system", `Failed to create branch: ${createRes.error}`);
+        }
+      } catch (e) {
+        addChatMessage("system", `Error creating branch: ${e.message}`);
+      }
+    }
+  });
+
+  picker.appendChild(createItem);
+  document.body.appendChild(picker);
+
+  const closeHandler = () => {
+    picker.remove();
+    document.removeEventListener('click', closeHandler);
+  };
+  setTimeout(() => {
+    document.addEventListener('click', closeHandler);
+  }, 10);
+}
+
 

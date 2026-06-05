@@ -179,17 +179,26 @@ window.getFileIcon = getFileIcon;
 
 /* ── Inject SVG icons into DOM on load ───────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
-  // Map element IDs to icon names for activity bar
-  const activityBarIcons = {
+  // Map element IDs to icon names
+  const iconMappings = {
     iconExplorer: 'explorer',
     iconSearch:   'search',
     iconGit:      'git',
     iconAI:       'ai',
     iconTerminal: 'terminal',
     iconSettings: 'settings',
+    iconNewFile:  'newFile',
+    iconNewFolder: 'newFolder',
+    iconGitRefresh: 'refresh',
+    iconGitPull:  'gitPull',
+    iconGitPush:  'gitPush',
+    iconGitCommit: 'gitCommit',
+    iconTerminalClose: 'close',
+    iconGitCreateBranch: 'plus',
+    iconTerminalAdd: 'plus',
   };
 
-  for (const [elementId, iconName] of Object.entries(activityBarIcons)) {
+  for (const [elementId, iconName] of Object.entries(iconMappings)) {
     const el = document.getElementById(elementId);
     if (el && NOVA_ICONS[iconName]) {
       el.innerHTML = NOVA_ICONS[iconName];

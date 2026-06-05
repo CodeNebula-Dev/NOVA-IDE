@@ -5,7 +5,9 @@
   "description": "Nova IDE — AI-agent-first desktop code editor built with Electron",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "test": "vitest --run",
+    "test:watch": "vitest"
   },
   "keywords": [
     "electron",
@@ -16,10 +18,24 @@
   "license": "MIT",
   "dependencies": {
     "better-sqlite3": "^12.10.0",
-    "electron": "^42.2.0",
+    "electron": "^30.0.0",
     "monaco-editor": "^0.55.1",
     "node-pty": "^1.1.0",
     "xterm": "^5.3.0",
     "xterm-addon-fit": "^0.8.0"
+  },
+  "devDependencies": {
+    "fast-check": "^3.23.2",
+    "jsdom": "^29.1.1",
+    "vitest": "^4.1.8"
+  },
+  "vitest": {
+    "environment": "jsdom",
+    "include": [
+      "renderer/tests/**/*.test.js"
+    ],
+    "setupFiles": [
+      "renderer/tests/test-setup.js"
+    ]
   }
 }

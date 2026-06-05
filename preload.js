@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld("novaAPI", {
   writeFile: (relativePath, content) => ipcRenderer.invoke("fs:write-file", relativePath, content),
   createFile: (relativePath) => ipcRenderer.invoke("fs:create-file", relativePath),
   createFolder: (relativePath) => ipcRenderer.invoke("fs:create-folder", relativePath),
+  renameNode: (oldPath, newPath) => ipcRenderer.invoke("fs:rename", oldPath, newPath),
+  deleteNode: (relativePath) => ipcRenderer.invoke("fs:delete", relativePath),
 
   // Native Terminal API (node-pty integration)
   terminalCreate: (cols, rows) => ipcRenderer.invoke("terminal:create", cols, rows),

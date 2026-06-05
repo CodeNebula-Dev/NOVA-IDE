@@ -70,3 +70,24 @@ document.addEventListener('DOMContentLoaded', () => {
     window.agentPanelManager = new AgentPanelManager();
   }
 });
+
+/* ─── BadgeManager ───────────────────────────────────────────────────────── */
+
+/**
+ * Update the git activity bar badge with the count of changed files.
+ * Hides badge when count <= 0; shows '99+' when count > 99.
+ */
+function updateGitBadge(changedFileCount) {
+  const badge = document.getElementById('gitBadge');
+  if (!badge) return;
+
+  if (!changedFileCount || changedFileCount <= 0) {
+    badge.classList.add('hidden');
+    badge.textContent = '';
+  } else {
+    badge.classList.remove('hidden');
+    badge.textContent = changedFileCount > 99 ? '99+' : String(changedFileCount);
+  }
+}
+
+window.updateGitBadge = updateGitBadge;
