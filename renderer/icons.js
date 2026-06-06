@@ -196,6 +196,7 @@ document.addEventListener('DOMContentLoaded', () => {
     iconTerminalClose: 'close',
     iconGitCreateBranch: 'plus',
     iconTerminalAdd: 'plus',
+    outlineChevron: 'chevronDown',
   };
 
   for (const [elementId, iconName] of Object.entries(iconMappings)) {

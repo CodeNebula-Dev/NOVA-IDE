@@ -858,6 +858,16 @@ function bindEvents() {
     onboardingSkipBtn.addEventListener("click", endOnboardingTour);
   }
 
+  // Outline Collapse/Expand Toggle
+  const outlineHeader = document.getElementById("outlineHeader");
+  const outlineTree = document.getElementById("outlineTree");
+  if (outlineHeader && outlineTree) {
+    outlineHeader.addEventListener("click", () => {
+      outlineHeader.classList.toggle("collapsed");
+      outlineTree.classList.toggle("hidden");
+    });
+  }
+
   // Terminal Add Button
   const addTerminalBtn = document.getElementById("addTerminalBtn");
   if (addTerminalBtn) {

@@ -66,7 +66,8 @@
           </div>
           <div id="fileTree" class="file-tree"></div>
           <div class="sidebar-section-divider"></div>
-          <div class="sidebar-header outline-header">
+          <div class="sidebar-header outline-header" id="outlineHeader" style="cursor: pointer; user-select: none; justify-content: flex-start; gap: 6px;">
+            <span id="outlineChevron" class="sidebar-chevron"></span>
             <span class="sidebar-title">OUTLINE</span>
           </div>
           <div id="outlineTree" class="outline-tree">
@@ -381,10 +382,14 @@
               <select id="uiThemeSelect" class="control-select">
                 <option value="catppuccin-mocha">Catppuccin Mocha (Dark)</option>
                 <option value="catppuccin-latte">Catppuccin Latte (Light)</option>
+                <option value="cyber-obsidian">Cyber Obsidian (Dark/Cyan)</option>
                 <option value="dracula">Dracula</option>
                 <option value="one-dark-pro">One Dark Pro</option>
+                <option value="github-light">Github Light (Light)</option>
+                <option value="monokai">Monokai</option>
                 <option value="nord">Nord</option>
                 <option value="solarized-dark">Solarized Dark</option>
+                <option value="synthwave84">Synthwave '84 (Neon)</option>
               </select>
             </label>
             <label class="control-label">

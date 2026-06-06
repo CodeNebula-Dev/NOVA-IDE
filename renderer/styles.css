@@ -3896,6 +3896,90 @@ a:focus-visible {
   --blue: #268bd2;
 }
 
+[data-theme="cyber-obsidian"] {
+  --bg-base: #08090c;
+  --bg-surface: #0e1117;
+  --bg-overlay: #040507;
+  --bg-mantle: #08090c;
+  --bg-crust: #030405;
+  --border: #181e29;
+  --border-active: #00e5ff;
+  --text-primary: #e2e4e9;
+  --text-secondary: #a0a5b1;
+  --text-muted: #626775;
+  --text-subtle: #474b55;
+  --accent: #00e5ff;
+  --accent-hover: #33ebff;
+  --accent-dim: rgba(0, 229, 255, 0.12);
+  --green: #00e676;
+  --red: #ff5252;
+  --yellow: #ffd740;
+  --blue: #40c4ff;
+}
+
+[data-theme="github-light"] {
+  --bg-base: #ffffff;
+  --bg-surface: #f6f8fa;
+  --bg-overlay: #ffffff;
+  --bg-mantle: #f6f8fa;
+  --bg-crust: #eaeef2;
+  --border: #d0d7de;
+  --border-active: #0969da;
+  --text-primary: #24292f;
+  --text-secondary: #57606a;
+  --text-muted: #8c959f;
+  --text-subtle: #afb8c1;
+  --accent: #0969da;
+  --accent-hover: #1f883d;
+  --accent-dim: rgba(9, 105, 218, 0.12);
+  --green: #1a7f37;
+  --red: #cf222e;
+  --yellow: #9a6700;
+  --blue: #0969da;
+}
+
+[data-theme="monokai"] {
+  --bg-base: #272822;
+  --bg-surface: #1e1f1c;
+  --bg-overlay: #141411;
+  --bg-mantle: #272822;
+  --bg-crust: #191919;
+  --border: #3e3d32;
+  --border-active: #a6e22e;
+  --text-primary: #f8f8f2;
+  --text-secondary: #f8f8f0;
+  --text-muted: #75715e;
+  --text-subtle: #49483e;
+  --accent: #f92672;
+  --accent-hover: #a6e22e;
+  --accent-dim: rgba(249, 38, 114, 0.15);
+  --green: #a6e22e;
+  --red: #f92672;
+  --yellow: #e6db74;
+  --blue: #66d9ef;
+}
+
+[data-theme="synthwave84"] {
+  --bg-base: #2b213a;
+  --bg-surface: #261b35;
+  --bg-overlay: #241831;
+  --bg-mantle: #2b213a;
+  --bg-crust: #1a1025;
+  --border: #463465;
+  --border-active: #fe4450;
+  --text-primary: #ffffff;
+  --text-secondary: #b3a5cc;
+  --text-muted: #846da6;
+  --text-subtle: #56407b;
+  --accent: #f07178;
+  --accent-hover: #fede5d;
+  --accent-dim: rgba(240, 113, 120, 0.15);
+  --green: #72f1b8;
+  --red: #fe4450;
+  --yellow: #fede5d;
+  --blue: #03edf9;
+}
+
 /* ── Context Picker Dropdown & Chips ── */
 .context-dropdown {
   position: absolute;
@@ -5099,6 +5183,30 @@ a:focus-visible {
 
 .outline-header {
   margin-top: 4px;
+  transition: background var(--transition-fast);
+}
+
+.outline-header:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.sidebar-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  width: 14px;
+  height: 14px;
+  transition: transform var(--transition-fast);
+}
+
+.sidebar-chevron svg {
+  width: 12px;
+  height: 12px;
+}
+
+#outlineHeader.collapsed #outlineChevron {
+  transform: rotate(-90deg);
 }
 
 /* Outline tree */
