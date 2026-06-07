@@ -226,6 +226,11 @@ body {
   background: rgba(255, 255, 255, 0.1);
 }
 
+.titlebar-controls .titlebar-btn.active {
+  color: var(--accent) !important;
+  background: var(--accent-dim) !important;
+}
+
 .titlebar-controls .titlebar-btn svg,
 .titlebar-controls .titlebar-btn i {
   width: 16px;

@@ -215,7 +215,10 @@ const els = {
   aiPanel: document.getElementById('aiPanel'),
   terminalCloseBtn: document.getElementById('terminalCloseBtn'),
   rapidChatContainer: document.getElementById("rapidChatContainer"),
-  rapidChatIframe: document.getElementById("rapidChatIframe")
+  rapidChatIframe: document.getElementById("rapidChatIframe"),
+  toggleLeftSidebarBtn: document.getElementById('toggleLeftSidebarBtn'),
+  toggleTerminalPanelBtn: document.getElementById('toggleTerminalPanelBtn'),
+  toggleAiPanelBtn: document.getElementById('toggleAiPanelBtn')
 };
 
 // Monaco AMD setup
@@ -244,6 +247,7 @@ async function init() {
   syncAgentModeUI();
   syncProviderUI();
   initResizableHandles();
+  updateLayoutToggleButtons();
 
   // Load API Keys from Environment Variables (fallback to LocalStorage)
   try {
@@ -649,28 +653,58 @@ function bindEvents() {
   activityBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       const panel = btn.dataset.panel;
-      activityBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      
-      document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.add('hidden'));
-      
       const sidebar = document.getElementById('sidebar');
-      if (panel === 'explorer') {
-        document.getElementById('explorerPanel')?.classList.remove('hidden');
-        sidebar?.classList.remove('collapsed');
-      } else if (panel === 'search') {
-        document.getElementById('searchPanel')?.classList.remove('hidden');
-        sidebar?.classList.remove('collapsed');
-      } else if (panel === 'git') {
-        document.getElementById('gitPanel')?.classList.remove('hidden');
-        sidebar?.classList.remove('collapsed');
-        refreshGitPanel();
-      } else if (panel === 'ai') {
-        const aiPanel = document.getElementById('aiPanel');
-        aiPanel?.classList.toggle('hidden');
+      
+      if (panel === 'ai') {
+        toggleAiPanel();
+        return;
+      }
+      
+      const isAlreadyActive = btn.classList.contains('active');
+      const isSidebarOpen = sidebar && !sidebar.classList.contains('collapsed');
+      
+      if (isAlreadyActive && isSidebarOpen) {
+        toggleSidebar();
+      } else {
+        activityBtns.forEach(b => {
+          if (b.dataset.panel !== 'ai') b.classList.remove('active');
+        });
+        btn.classList.add('active');
+        
+        document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.add('hidden'));
+        
+        if (panel === 'explorer') {
+          document.getElementById('explorerPanel')?.classList.remove('hidden');
+        } else if (panel === 'search') {
+          document.getElementById('searchPanel')?.classList.remove('hidden');
+        } else if (panel === 'git') {
+          document.getElementById('gitPanel')?.classList.remove('hidden');
+          refreshGitPanel();
+        }
+        
+        if (sidebar && sidebar.classList.contains('collapsed')) {
+          toggleSidebar();
+        }
       }
     });
   });
+
+  // Layout Toggle Buttons in Titlebar
+  if (els.toggleLeftSidebarBtn) {
+    els.toggleLeftSidebarBtn.addEventListener('click', () => {
+      toggleSidebar();
+    });
+  }
+  if (els.toggleTerminalPanelBtn) {
+    els.toggleTerminalPanelBtn.addEventListener('click', () => {
+      toggleTerminal();
+    });
+  }
+  if (els.toggleAiPanelBtn) {
+    els.toggleAiPanelBtn.addEventListener('click', () => {
+      toggleAiPanel();
+    });
+  }
 
   // Search Panel Input Event Binding
   const searchInput = document.getElementById("searchInput");
@@ -778,23 +812,7 @@ function bindEvents() {
   els.saveSettingsBtn.addEventListener("click", saveSettings);
 
   els.terminalToggleBtn.addEventListener("click", () => {
-    state.terminalVisible = !state.terminalVisible;
-    els.terminalPanel.classList.toggle("hidden", !state.terminalVisible);
-    
-    if (state.terminalVisible) {
-      if (!activeTerminal) {
-        initTerminal().then(() => {
-          if (activeTerminal) {
-            activeTerminal.term.focus();
-          }
-        });
-      } else {
-        setTimeout(() => {
-          activeTerminal.fit.fit();
-          activeTerminal.term.focus();
-        }, 50);
-      }
-    }
+    toggleTerminal();
   });
 
   els.openRouterKeyInput?.addEventListener("input", () => {
@@ -1010,6 +1028,106 @@ function toggleChatHistory() {
   console.log('📋 Toggling chat history');
 }
 
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const handle = document.getElementById('resizeSidebar');
+  if (!sidebar) return;
+  const isCollapsed = sidebar.classList.toggle('collapsed');
+  
+  if (handle) {
+    handle.classList.toggle('hidden', isCollapsed);
+  }
+  
+  // Update activity bar active class
+  const activityBtns = document.querySelectorAll('.activity-btn[data-panel]');
+  if (isCollapsed) {
+    activityBtns.forEach(btn => {
+      if (btn.dataset.panel !== 'ai') {
+        btn.classList.remove('active');
+      }
+    });
+  } else {
+    // If not collapsed and no button is active, activate explorer
+    const explorerBtn = document.querySelector('.activity-btn[data-panel="explorer"]');
+    const searchBtn = document.querySelector('.activity-btn[data-panel="search"]');
+    const gitBtn = document.querySelector('.activity-btn[data-panel="git"]');
+    const hasActive = [explorerBtn, searchBtn, gitBtn].some(b => b?.classList.contains('active'));
+    if (!hasActive) {
+      explorerBtn?.classList.add('active');
+      document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.add('hidden'));
+      document.getElementById('explorerPanel')?.classList.remove('hidden');
+    }
+  }
+
+  if (state.editor) state.editor.layout();
+  updateLayoutToggleButtons();
+}
+
+function toggleTerminal() {
+  state.terminalVisible = !state.terminalVisible;
+  const terminalPanel = document.getElementById('terminalPanel');
+  if (terminalPanel) {
+    terminalPanel.classList.toggle("hidden", !state.terminalVisible);
+  }
+  
+  if (state.terminalVisible) {
+    if (!activeTerminal) {
+      initTerminal().then(() => {
+        if (activeTerminal) {
+          activeTerminal.term.focus();
+        }
+      });
+    } else {
+      setTimeout(() => {
+        activeTerminal.fit.fit();
+        activeTerminal.term.focus();
+      }, 50);
+    }
+  }
+  
+  if (state.editor) state.editor.layout();
+  updateLayoutToggleButtons();
+}
+
+function toggleAiPanel() {
+  const aiPanel = document.getElementById('aiPanel');
+  const handle = document.getElementById('resizeAiPanel');
+  if (!aiPanel) return;
+  
+  const isHidden = aiPanel.classList.toggle('hidden');
+  if (handle) {
+    handle.classList.toggle('hidden', isHidden);
+  }
+  
+  if (state.editor) state.editor.layout();
+  updateLayoutToggleButtons();
+}
+
+function updateLayoutToggleButtons() {
+  const sidebar = document.getElementById('sidebar');
+  const terminalPanel = document.getElementById('terminalPanel');
+  const aiPanel = document.getElementById('aiPanel');
+  
+  if (els.toggleLeftSidebarBtn && sidebar) {
+    const isSidebarVisible = !sidebar.classList.contains('collapsed');
+    els.toggleLeftSidebarBtn.classList.toggle('active', isSidebarVisible);
+  }
+  
+  if (els.toggleTerminalPanelBtn && terminalPanel) {
+    els.toggleTerminalPanelBtn.classList.toggle('active', state.terminalVisible);
+  }
+  
+  if (els.toggleAiPanelBtn && aiPanel) {
+    const isAiVisible = !aiPanel.classList.contains('hidden');
+    els.toggleAiPanelBtn.classList.toggle('active', isAiVisible);
+  }
+}
+
+window.toggleSidebar = toggleSidebar;
+window.toggleTerminal = toggleTerminal;
+window.toggleAiPanel = toggleAiPanel;
+window.updateLayoutToggleButtons = updateLayoutToggleButtons;
+
 /**
  * Select agent role
  */
@@ -1109,6 +1227,9 @@ function showWelcomeScreen() {
     // Trigger the sequenced typing intro log animation
     animateWelcomeIntroLogText();
   }
+  if (els.monacoEditorContainer) {
+    els.monacoEditorContainer.classList.add('hidden');
+  }
   if (els.tabsBar) {
     const empty = document.createElement('div');
     empty.className = 'tab-empty';
@@ -1142,6 +1263,15 @@ function hideWelcomeScreen() {
       ws.classList.remove('fade-out');
     }
   }, 300);
+
+  if (els.monacoEditorContainer) {
+    els.monacoEditorContainer.classList.remove('hidden');
+    if (state.editor) {
+      setTimeout(() => {
+        state.editor.layout();
+      }, 50);
+    }
+  }
 }
 
 async function refreshWorkspaceTree() {
@@ -1482,6 +1612,7 @@ function clearEditor() {
   updateStatusBar();
   renderBreadcrumbs();
   renderOutline();
+  showWelcomeScreen();
 }
 
 /**
@@ -1495,6 +1626,8 @@ function setEditorContent(content, filePath) {
     updateStatusBar();
     return;
   }
+
+  hideWelcomeScreen();
 
   const fileUri = createMonacoUri(filePath);
   let model = monaco.editor.getModel(fileUri);
@@ -4321,7 +4454,7 @@ const TOUR_STEPS = [
     content: 'The Workspace Explorer displays your project folder structure and the new Outline panel, showing all your code symbols (functions, classes) for easy navigation.'
   },
   {
-    selector: '#monacoEditorContainer',
+    selector: '.editor-area',
     content: 'Edit code in Monaco Editor. Use the dynamic breadcrumbs at the top to navigate file path segments and switch files seamlessly.'
   },
   {

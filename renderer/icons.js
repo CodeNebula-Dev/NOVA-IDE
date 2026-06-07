@@ -132,6 +132,21 @@ const NOVA_ICONS = {
     <line x1="12" y1="11" x2="12" y2="17"/>
     <line x1="9" y1="14" x2="15" y2="14"/>
   </svg>`,
+
+  layoutSidebarLeft: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2"/>
+    <line x1="9" y1="3" x2="9" y2="21"/>
+  </svg>`,
+
+  layoutSidebarRight: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2"/>
+    <line x1="15" y1="3" x2="15" y2="21"/>
+  </svg>`,
+
+  layoutPanelBottom: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2"/>
+    <line x1="3" y1="15" x2="21" y2="15"/>
+  </svg>`,
 };
 
 /* ── Colorful SVG File Type Icons ───────────────────────── */
@@ -197,6 +212,9 @@ document.addEventListener('DOMContentLoaded', () => {
     iconGitCreateBranch: 'plus',
     iconTerminalAdd: 'plus',
     outlineChevron: 'chevronDown',
+    iconToggleSidebar: 'layoutSidebarLeft',
+    iconToggleTerminal: 'layoutPanelBottom',
+    iconToggleAi: 'layoutSidebarRight',
   };
 
   for (const [elementId, iconName] of Object.entries(iconMappings)) {

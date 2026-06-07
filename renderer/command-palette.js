@@ -13,10 +13,10 @@ const COMMAND_REGISTRY = [
   { id: 'open-folder',      label: 'Open Folder',      action: () => document.getElementById('openWorkspaceBtn')?.click() },
   { id: 'new-file',         label: 'New File',          action: () => document.getElementById('newFileBtn')?.click() },
   { id: 'new-folder',       label: 'New Folder',        action: () => document.getElementById('newFolderBtn')?.click() },
-  { id: 'toggle-terminal',  label: 'Toggle Terminal',   action: () => document.getElementById('terminalToggleBtn')?.click() },
+  { id: 'toggle-terminal',  label: 'Toggle Terminal',   action: () => window.toggleTerminal?.() },
   { id: 'open-settings',    label: 'Open Settings',     action: () => document.getElementById('settingsBtn')?.click() },
-  { id: 'toggle-ai-panel',  label: 'Toggle AI Panel',   action: () => { const p = document.getElementById('aiPanel'); if (p) p.classList.toggle('hidden'); } },
-  { id: 'toggle-sidebar',   label: 'Toggle Sidebar',    action: () => { const s = document.getElementById('sidebar'); if (s) s.classList.toggle('collapsed'); } },
+  { id: 'toggle-ai-panel',  label: 'Toggle AI Panel',   action: () => window.toggleAiPanel?.() },
+  { id: 'toggle-sidebar',   label: 'Toggle Sidebar',    action: () => window.toggleSidebar?.() },
   { id: 'new-conversation', label: 'New Conversation',  action: () => document.getElementById('newConversationBtn')?.click() }
 ];
 
