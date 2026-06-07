@@ -1,48 +1,13 @@
 /**
- * Planner Agent (DeepSeek R1 via OpenRouter)
+ * Planner Agent (Pollinations Free API)
  * Generates an implementation checklist based on user prompt and active file contexts.
+ * Part of the SuperNova v1 engine — no API keys required.
  */
 
 const { StreamParser, parsePartialJSONArray } = require('./parser');
 
-async function runPlanner(userPrompt, contextData, apiKey, onThought, onPlanReady) {
-  const systemPrompt = `You are the Lead Architect Agent inside NOVA IDE. Your objective is to analyze a developer's request, inspect the codebase context, and construct a highly precise, actionable planning checklist of tasks.
-
-Each task MUST specify:
-1. id: unique string, e.g. "task-1"
-2. description: what exactly needs to be modified
-3. assignedFile: the relative file path that needs editing (e.g. "renderer/app.js" or "main.js")
-
-Return your thought process fully inside <think>...</think> tags.
-At the very end of your response, output a raw JSON array matching this typescript schema:
-[
-  { "id": "task-1", "description": "Create SQLite checkpoints table", "assignedFile": "main.js" }
-]
-Do not write markdown backticks or explanation texts outside the think tags except for the raw JSON payload.`;
-
-  let workspaceFilesText = "";
-  if (contextData.workspaceFiles && contextData.workspaceFiles.length > 0) {
-    workspaceFilesText = "\n\nWorkspace Files Content:\n" + contextData.workspaceFiles.map(f => {
-      return `File: ${f.relativePath}\n\`\`\`\n${f.content}\n\`\`\``;
-    }).join("\n\n");
-  }
-
-  const userContent = `Workspace Tree:
-${contextData.treeText || "No file tree available"}${workspaceFilesText}
-
-Current File: ${contextData.activeFilePath || "None"}
-File Content:
-\`\`\`
-${contextData.activeFileContent || ""}
-\`\`\`
-
-User Request:
-${userPrompt}`;
-
-  if (!apiKey || apiKey.trim() === "") {
-    // Fall back to free Pollinations API
-    const apiURL = "https://text.pollinations.ai/v1/chat/completions";
-    const systemPromptFallback = `You are the Lead Architect Agent inside NOVA IDE.
+async function runPlanner(userPrompt, contextData, onThought, onPlanReady) {
+  const systemPrompt = `You are the Lead Architect Agent inside NOVA IDE, powered by SuperNova v1.
 Your objective is to inspect the codebase context and developer request, and construct a precise plan of tasks as a JSON array.
 
 CRITICAL GUIDELINES FOR PLANNING:
@@ -66,265 +31,170 @@ Return a raw JSON array matching this schema:
 
 CRITICAL: Return ONLY the raw JSON array. No other text, no markdown backticks, no explanations. Just the JSON array.`;
 
+  let workspaceFilesText = "";
+  if (contextData.workspaceFiles && contextData.workspaceFiles.length > 0) {
+    workspaceFilesText = "\n\nWorkspace Files Content:\n" + contextData.workspaceFiles.map(f => {
+      return `File: ${f.relativePath}\n\`\`\`\n${f.content}\n\`\`\``;
+    }).join("\n\n");
+  }
+
+  const userContent = `Workspace Tree:
+${contextData.treeText || "No file tree available"}${workspaceFilesText}
+
+Current File: ${contextData.activeFilePath || "None"}
+File Content:
+\`\`\`
+${contextData.activeFileContent || ""}
+\`\`\`
+
+User Request:
+${userPrompt}`;
+
+  // Use Pollinations free API — no API key needed
+  const apiURL = "https://text.pollinations.ai/v1/chat/completions";
+  
+  onThought("SuperNova v1 is planning your implementation...\nThinking...");
+  
+  const maxRetries = 5;
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  let response;
+  let jsonBuffer = "";
+  let finalPlan = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const initialTimeout = setTimeout(() => {
+      console.warn("[Planner] Pollinations initial request timed out.");
+      controller.abort();
+    }, 45000);
+    
+    // Choose model dynamically to handle rate limits (429)
+    const modelToUse = attempt === 1 ? "openai" : (attempt % 2 === 0 ? "llama" : "mistral");
     const body = JSON.stringify({
       messages: [
-        { role: "system", content: systemPromptFallback },
+        { role: "system", content: systemPrompt },
         { role: "user", content: userContent }
       ],
-      model: "openai",
+      model: modelToUse,
       seed: 42,
       private: true,
       stream: true
     });
     
-    onThought("No API Key detected. Using free Pollinations fallback...\nThinking...");
-    
-    const maxRetries = 5;
-    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-    let response;
-    let jsonBuffer = "";
-    let finalPlan = null;
-    
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      const controller = new AbortController();
-      const initialTimeout = setTimeout(() => {
-        console.warn("[Planner] Pollinations initial request timed out.");
+    try {
+      response = await fetch(apiURL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: controller.signal
+      });
+      
+      clearTimeout(initialTimeout);
+      
+      if (!response.ok) {
+        throw new Error(`Pollinations free API error ${response.status}`);
+      }
+      
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let streamBuffer = "";
+      
+      const streamParser = new StreamParser(
+        (thoughtChunk) => {
+          onThought(thoughtChunk);
+        },
+        (contentChunk) => {
+          jsonBuffer += contentChunk;
+          const partialPlan = parsePartialJSONArray(jsonBuffer);
+          if (partialPlan && partialPlan.length > 0) {
+            onPlanReady(partialPlan, false);
+          }
+        }
+      );
+      
+      let heartbeatTimer = setTimeout(() => {
+        console.warn("[Planner] Pollinations stream stalled. Aborting.");
         controller.abort();
-      }, 45000);
+      }, 20000);
       
       try {
-        response = await fetch(apiURL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-          signal: controller.signal
-        });
-        
-        clearTimeout(initialTimeout);
-        
-        if (!response.ok) {
-          throw new Error(`Pollinations free API error ${response.status}`);
-        }
-        
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        let streamBuffer = "";
-        
-        const streamParser = new StreamParser(
-          (thoughtChunk) => {
-            onThought(thoughtChunk);
-          },
-          (contentChunk) => {
-            jsonBuffer += contentChunk;
-            const partialPlan = parsePartialJSONArray(jsonBuffer);
-            if (partialPlan && partialPlan.length > 0) {
-              onPlanReady(partialPlan, false);
-            }
-          }
-        );
-        
-        let heartbeatTimer = setTimeout(() => {
-          console.warn("[Planner] Pollinations stream stalled. Aborting.");
-          controller.abort();
-        }, 20000);
-        
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            clearTimeout(heartbeatTimer);
-            if (done) break;
+        while (true) {
+          const { done, value } = await reader.read();
+          clearTimeout(heartbeatTimer);
+          if (done) break;
+          
+          heartbeatTimer = setTimeout(() => {
+            console.warn("[Planner] Pollinations stream stalled. Aborting.");
+            controller.abort();
+          }, 20000);
+          
+          streamBuffer += decoder.decode(value, { stream: true });
+          
+          let lineIndex;
+          while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
+            const line = streamBuffer.slice(0, lineIndex).trim();
+            streamBuffer = streamBuffer.slice(lineIndex + 1);
             
-            heartbeatTimer = setTimeout(() => {
-              console.warn("[Planner] Pollinations stream stalled. Aborting.");
-              controller.abort();
-            }, 20000);
-            
-            streamBuffer += decoder.decode(value, { stream: true });
-            
-            let lineIndex;
-            while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
-              const line = streamBuffer.slice(0, lineIndex).trim();
-              streamBuffer = streamBuffer.slice(lineIndex + 1);
+            if (line.startsWith("data:")) {
+              const dataStr = line.slice(5).trim();
+              if (dataStr === "[DONE]") continue;
               
-              if (line.startsWith("data:")) {
-                const dataStr = line.slice(5).trim();
-                if (dataStr === "[DONE]") continue;
-                
-                try {
-                  const parsed = JSON.parse(dataStr);
-                  const text = parsed?.choices?.[0]?.delta?.content || parsed?.choices?.[0]?.delta?.reasoning || "";
-                  if (text) {
-                    streamParser.feed(text);
-                  }
-                } catch (e) {
-                  // Ignore JSON parse errors
+              try {
+                const parsed = JSON.parse(dataStr);
+                const text = parsed?.choices?.[0]?.delta?.content || parsed?.choices?.[0]?.delta?.reasoning || "";
+                if (text) {
+                  streamParser.feed(text);
                 }
+              } catch (e) {
+                // Ignore JSON parse errors
               }
             }
           }
-        } finally {
-          clearTimeout(heartbeatTimer);
-          try {
-            reader.releaseLock();
-          } catch (e) {}
         }
-        
-        streamParser.flush();
-        
-        // Success! Final plan extraction:
-        finalPlan = parsePartialJSONArray(jsonBuffer);
-        break; // Success! Exit retry loop
-      } catch (err) {
-        clearTimeout(initialTimeout);
-        if (attempt === maxRetries) {
-          throw err;
-        }
-        const isRateLimitOrServerErr = err.message && (
-          err.message.includes("429") || 
-          err.message.includes("502") || 
-          err.message.includes("503") || 
-          err.message.includes("504") ||
-          err.message.includes("timeout") ||
-          err.message.includes("aborted")
-        );
-        const retryDelay = isRateLimitOrServerErr ? (attempt * 8000) : (attempt * 3000);
-        onThought(`\n[Planner Warning: Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying in ${retryDelay / 1000}s...]`);
-        await delay(retryDelay);
+      } finally {
+        clearTimeout(heartbeatTimer);
+        try {
+          reader.releaseLock();
+        } catch (e) {}
       }
-    }
-    
-    if (!finalPlan || finalPlan.length === 0) {
-      console.warn("Valkyrie Planner fallback parsing failed, synthesizing default task.");
-      const activeFile = contextData.activeFilePath || "main.js";
-      finalPlan = [
-        {
-          id: "task-1",
-          description: userPrompt,
-          assignedFile: activeFile
-        }
-      ];
-      onThought("\n[Note: Planner JSON extraction was malformed. Auto-synthesized single-task execution plan to proceed.]");
-    }
-    
-    onPlanReady(finalPlan, true);
-    return finalPlan;
-  }
-
-  // Use DeepSeek R1 via OpenRouter
-  const model = "deepseek/deepseek-r1:free"; // Default to free tier
-  const apiURL = "https://openrouter.ai/api/v1/chat/completions";
-
-  const controller = new AbortController();
-  // 45s initial request timeout
-  const initialTimeout = setTimeout(() => {
-    console.warn("[Planner] Initial request timed out.");
-    controller.abort();
-  }, 45000);
-
-  let response;
-  try {
-    response = await fetch(apiURL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-        "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE",
-        "X-Title": "Nova IDE"
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent }
-        ],
-        stream: true
-      }),
-      signal: controller.signal
-    });
-  } finally {
-    clearTimeout(initialTimeout);
-  }
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Planner API Error (${response.status}): ${errorText}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let fullContent = "";
-  let jsonBuffer = "";
-
-  const streamParser = new StreamParser(
-    (thoughtChunk) => {
-      onThought(thoughtChunk);
-    },
-    (contentChunk) => {
-      jsonBuffer += contentChunk;
-      // Periodically try to parse partial array and stream to UI
-      const partialPlan = parsePartialJSONArray(jsonBuffer);
-      if (partialPlan && partialPlan.length > 0) {
-        onPlanReady(partialPlan, false);
-      }
-    }
-  );
-
-  let streamBuffer = "";
-  let heartbeatTimer = setTimeout(() => {
-    console.warn("[Planner] Stream stalled (no chunk received for 20 seconds). Aborting.");
-    controller.abort();
-  }, 20000);
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      clearTimeout(heartbeatTimer);
-      if (done) break;
-
-      heartbeatTimer = setTimeout(() => {
-        console.warn("[Planner] Stream stalled (no chunk received for 20 seconds). Aborting.");
-        controller.abort();
-      }, 20000);
-
-      streamBuffer += decoder.decode(value, { stream: true });
       
-      let lineIndex;
-      while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
-        const line = streamBuffer.slice(0, lineIndex).trim();
-        streamBuffer = streamBuffer.slice(lineIndex + 1);
-        
-        if (line.startsWith("data:")) {
-          const dataStr = line.slice(5).trim();
-          if (dataStr === "[DONE]") continue;
-
-          try {
-            const parsed = JSON.parse(dataStr);
-            const text = parsed?.choices?.[0]?.delta?.content || "";
-            if (text) {
-              fullContent += text;
-              streamParser.feed(text);
-            }
-          } catch (e) {
-            // Ignore JSON error
-          }
-        }
+      streamParser.flush();
+      
+      // Final plan extraction
+      finalPlan = parsePartialJSONArray(jsonBuffer);
+      break; // Success
+    } catch (err) {
+      clearTimeout(initialTimeout);
+      if (attempt === maxRetries) {
+        throw err;
       }
+      const isRateLimitOrServerErr = err.message && (
+        err.message.includes("429") || 
+        err.message.includes("502") || 
+        err.message.includes("503") || 
+        err.message.includes("504") ||
+        err.message.includes("timeout") ||
+        err.message.includes("aborted")
+      );
+      const retryDelay = isRateLimitOrServerErr ? (attempt * 8000) : (attempt * 3000);
+      onThought(`\n[Planner Warning: Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying in ${retryDelay / 1000}s...]`);
+      await delay(retryDelay);
     }
-  } finally {
-    clearTimeout(heartbeatTimer);
-    try {
-      reader.releaseLock();
-    } catch (e) {}
   }
-
-  streamParser.flush();
   
-  // Final parse
-  const finalPlan = parsePartialJSONArray(jsonBuffer);
   if (!finalPlan || finalPlan.length === 0) {
-    throw new Error("Failed to extract a structured plan from Planner model response.");
+    console.warn("SuperNova Planner parsing failed, synthesizing default task.");
+    const activeFile = contextData.activeFilePath || "main.js";
+    finalPlan = [
+      {
+        id: "task-1",
+        description: userPrompt,
+        assignedFile: activeFile
+      }
+    ];
+    onThought("\n[Note: Planner JSON extraction was malformed. Auto-synthesized single-task execution plan to proceed.]");
   }
-
+  
   onPlanReady(finalPlan, true);
   return finalPlan;
 }

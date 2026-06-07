@@ -6,13 +6,13 @@ const pty = require("node-pty");
 const os = require("os");
 const crypto = require("crypto");
 const Database = require("better-sqlite3");
-const { ValkyrieEngine } = require("./main/agents/valkyrie");
+const { SuperNovaEngine } = require("./main/agents/supernova");
 const { exec } = require("child_process");
 const util = require("util");
 const execPromise = util.promisify(exec);
 
 let mainWindow;
-let activeValkyrie = null;
+let activeSupernova = null;
 const ptyProcesses = new Map();
 
 let workspaceRoot = ""; // Empty by default — no auto-open on startup
@@ -373,39 +373,32 @@ ipcMain.handle("chat:delete-message", (event, messageId) => {
 });
 
 
-ipcMain.handle("valkyrie:execute", async (event, conversationId, prompt, activeFilePath, apiKeys) => {
-  if (activeValkyrie) {
-    activeValkyrie.abort();
+ipcMain.handle("supernova:execute", async (event, conversationId, prompt, activeFilePath) => {
+  if (activeSupernova) {
+    activeSupernova.abort();
   }
-  activeValkyrie = new ValkyrieEngine(mainWindow, db, workspaceRoot);
+  activeSupernova = new SuperNovaEngine(mainWindow, db, workspaceRoot);
   try {
-    const results = await activeValkyrie.run(conversationId, prompt, activeFilePath, apiKeys);
+    const results = await activeSupernova.run(conversationId, prompt, activeFilePath);
     return results;
   } finally {
-    activeValkyrie = null;
+    activeSupernova = null;
   }
 });
 
-ipcMain.handle("valkyrie:abort", async () => {
-  if (activeValkyrie) {
-    activeValkyrie.abort();
-    activeValkyrie = null;
+ipcMain.handle("supernova:abort", async () => {
+  if (activeSupernova) {
+    activeSupernova.abort();
+    activeSupernova = null;
   }
   return true;
 });
 
-ipcMain.handle("valkyrie:get-env-keys", () => {
-  return {
-    openrouter: process.env.OPENROUTER_API_KEY || "",
-    groq: process.env.GROQ_API_KEY || ""
-  };
-});
-
 const { runReviewer } = require("./main/agents/reviewer");
-ipcMain.handle("valkyrie:review-selection", async (event, text, activeFilePath, apiKeys) => {
+ipcMain.handle("supernova:review-selection", async (event, text, activeFilePath) => {
   try {
     const task = { description: "Analyze the following code selection for bugs, syntax errors, or potential optimizations." };
-    const review = await runReviewer(task, text, text, apiKeys);
+    const review = await runReviewer(task, text, text);
     return review;
   } catch (err) {
     return { error: err.message };
@@ -414,9 +407,47 @@ ipcMain.handle("valkyrie:review-selection", async (event, text, activeFilePath, 
 
 
 // ── Single-agent chat (Chat / Edit / Explain / Debug) ──────────────────────
-// Uses Pollinations by default (no API key). Falls back to OpenRouter if key present.
-ipcMain.handle("agent:chat", async (event, { agent, prompt, filePath, fileContent, apiKeys, mode }) => {
+// Exclusively uses Pollinations (completely free, no API key).
+ipcMain.handle("agent:chat", async (event, { prompt, filePath, fileContent, mode }) => {
   const https = require("https");
+
+  // Check if query can be handled locally (offline)
+  const cleanPrompt = prompt.toLowerCase().trim().replace(/[?.,!]/g, "");
+  const helpTriggers = [
+    "what are you", "what can you do", "who are you", "help", 
+    "supernova help", "about", "about supernova", "what is this",
+    "tell me about yourself", "capabilities", "features"
+  ];
+  if (helpTriggers.some(t => cleanPrompt.includes(t) || (t.includes(cleanPrompt) && cleanPrompt.length > 3))) {
+    return {
+      text: `⚡ **SuperNova v1 AI Engine** ⚡
+
+I am your built-in, zero-setup AI assistant inside Nova IDE!
+
+Here is what I can do for you:
+1. **Multi-Agent Coding Tasks**: Put me in **SuperNova v1** mode and describe complex coding tasks. I will:
+   - **Plan**: Break down your task into step-by-step checklists.
+   - **Code**: Automatically write patch files using high-precision code models.
+   - **Review**: Review code quality, logic correctness, and syntax validity.
+   - **Apply**: Safely verify patches and save changes to disk with automatic checkpoint backups.
+2. **Simple Chat & Code QA**: Select **GPT OSS 20B** to ask coding questions, explain code snippets, or draft algorithms.
+3. **Workspace-Wide Context**: I scan your open directory automatically to understand imports, configuration files, and project layout.
+4. **Resiliency**: If default servers rate-limit or fail, I dynamically alternate between multiple alternative free models (Qwen-Coder, Llama 3.3, Mistral, Gemma) to bypass overloads.
+
+No API keys are required. What should we build today?`,
+      code: null,
+      raw: ""
+    };
+  }
+
+  const greetingTriggers = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"];
+  if (greetingTriggers.some(t => cleanPrompt === t)) {
+    return {
+      text: `Hello! I am SuperNova v1, your built-in AI assistant. How can I help you write or debug code today?`,
+      code: null,
+      raw: ""
+    };
+  }
 
   const modePrompts = {
     chat:    (f, l) => `You are Nova, an expert AI coding assistant. The user has ${f} open. Be concise and precise.`,
@@ -437,8 +468,6 @@ ipcMain.handle("agent:chat", async (event, { agent, prompt, filePath, fileConten
     }
   ];
 
-  const orKey = apiKeys?.openrouter || "";
-
   // Truncation detection logic for single agent
   function checkSingleAgentTruncation(text) {
     const trimmed = text.trim();
@@ -456,52 +485,51 @@ ipcMain.handle("agent:chat", async (event, { agent, prompt, filePath, fileConten
     return false;
   }
 
-  // --- Call OpenRouter if key present, otherwise Pollinations ---
-  const callApi = async (currentMessages) => {
-    if (orKey) {
-      const modelMap = {
-        deepseek: "deepseek/deepseek-r1:free",
-        qwen:     "qwen/qwen-2.5-coder-32b-instruct:free",
-        llama:    "meta-llama/llama-3.3-70b-instruct:free",
-        gemma:    "google/gemma-3-27b-it:free",
-        gemini:   "google/gemini-2.5-flash:free"
-      };
-      const model = modelMap[agent] || "meta-llama/llama-3.3-70b-instruct:free";
-      const body = JSON.stringify({ model, messages: currentMessages, max_tokens: 4096 });
-
-      const orResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${orKey}`,
-          "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE",
-          "X-Title": "Nova IDE"
-        },
-        body,
-        signal: AbortSignal.timeout(30000)
-      });
-      if (!orResponse.ok) {
-        const errText = await orResponse.text();
-        throw new Error(`OpenRouter error ${orResponse.status}: ${errText.slice(0, 200)}`);
+  // --- Call Pollinations Helper with Retry and Model Rotation ---
+  const callPollinationsWithRetry = async (currentMessages, defaultModel = "openai", maxRetries = 5) => {
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      let modelToUse = defaultModel;
+      if (attempt > 1) {
+        if (defaultModel === "qwen-coder") {
+          modelToUse = attempt % 2 === 0 ? "openai" : "llama";
+        } else {
+          modelToUse = attempt % 2 === 0 ? "llama" : "mistral";
+        }
       }
-      const data = await orResponse.json();
-      return data?.choices?.[0]?.message?.content || "";
-    } else {
-      // Pollinations — completely free, no key
-      const polBody = JSON.stringify({ messages: currentMessages, model: "openai", seed: 42, private: true });
-      const polResponse = await fetch("https://text.pollinations.ai/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: polBody,
-        signal: AbortSignal.timeout(30000)
-      });
-      if (!polResponse.ok) throw new Error(`Pollinations error ${polResponse.status}`);
-      const resText = await polResponse.text();
+      
+      const body = JSON.stringify({ messages: currentMessages, model: modelToUse, seed: 42, private: true });
       try {
-        const data = JSON.parse(resText);
-        return data?.choices?.[0]?.message?.content || resText;
-      } catch (e) {
-        return resText;
+        const polResponse = await fetch("https://text.pollinations.ai/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          signal: AbortSignal.timeout(30000)
+        });
+        
+        if (!polResponse.ok) {
+          throw new Error(`Pollinations error ${polResponse.status}`);
+        }
+        
+        const resText = await polResponse.text();
+        try {
+          const data = JSON.parse(resText);
+          return data?.choices?.[0]?.message?.content || resText;
+        } catch (e) {
+          return resText;
+        }
+      } catch (err) {
+        if (attempt === maxRetries) throw err;
+        const isRateLimitOrServerErr = err.message && (
+          err.message.includes("429") || 
+          err.message.includes("502") || 
+          err.message.includes("503") || 
+          err.message.includes("504")
+        );
+        const retryDelay = isRateLimitOrServerErr ? (attempt * 6000) : (attempt * 3000);
+        console.warn(`[Agent API Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying with model ${modelToUse} in ${retryDelay / 1000}s...]`);
+        await delay(retryDelay);
       }
     }
   };
@@ -511,7 +539,7 @@ ipcMain.handle("agent:chat", async (event, { agent, prompt, filePath, fileConten
   const maxContinuations = 3;
 
   while (true) {
-    const currentChunkText = await callApi(messages);
+    const currentChunkText = await callPollinationsWithRetry(messages, "openai");
     rawText += currentChunkText;
 
     if (checkSingleAgentTruncation(rawText) && continuationCount < maxContinuations) {
@@ -556,8 +584,7 @@ ipcMain.handle("agent:chat", async (event, { agent, prompt, filePath, fileConten
   return { text: text || (code ? "Here is the updated code:" : ""), code, raw: rawText };
 });
 
-ipcMain.handle("agent:inline-edit", async (event, { instruction, selectedCode, fullFileContent, filePath, apiKeys }) => {
-  const orKey = apiKeys?.openrouter || "";
+ipcMain.handle("agent:inline-edit", async (event, { instruction, selectedCode, fullFileContent, filePath }) => {
   const systemPrompt = `You are Nova, a precise code editor. The user selected code in ${filePath || 'their file'} and wants you to edit it. Return ONLY the replacement code — no explanations, no markdown fences, no extra text. Just the code that should replace the selection.`;
   
   const messages = [
@@ -565,35 +592,8 @@ ipcMain.handle("agent:inline-edit", async (event, { instruction, selectedCode, f
     { role: "user", content: `Selected code:\n\`\`\`\n${selectedCode}\n\`\`\`\n\nInstruction: ${instruction}` }
   ];
 
-  let result = "";
-  if (orKey) {
-    const body = JSON.stringify({ model: "qwen/qwen-2.5-coder-32b-instruct:free", messages, max_tokens: 4096 });
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${orKey}`, "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE", "X-Title": "Nova IDE" },
-      body,
-      signal: AbortSignal.timeout(30000)
-    });
-    if (!response.ok) throw new Error(`OpenRouter error ${response.status}`);
-    const data = await response.json();
-    result = data?.choices?.[0]?.message?.content || "";
-  } else {
-    const body = JSON.stringify({ messages, model: "openai", seed: 42, private: true });
-    const response = await fetch("https://text.pollinations.ai/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-      signal: AbortSignal.timeout(30000)
-    });
-    if (!response.ok) throw new Error(`Pollinations error ${response.status}`);
-    const resText = await response.text();
-    try {
-      const data = JSON.parse(resText);
-      result = data?.choices?.[0]?.message?.content || resText;
-    } catch (e) {
-      result = resText;
-    }
-  }
+  // Inline edit needs highly structural coding, so we default to qwen-coder but allow fallbacks
+  let result = await callPollinationsWithRetry(messages, "qwen-coder");
 
   // Clean up: remove markdown fences if present
   result = result.replace(/^```[\w]*\n/, '').replace(/\n```$/, '').trim();

@@ -3227,7 +3227,7 @@ a:focus-visible {
   border-radius: 50%;
   background: var(--accent);
   animation: pulse 2.5s ease-in-out infinite;
-  box-shadow: 0 0 8px rgba(203, 166, 247, 0.4);
+  box-shadow: 0 0 8px var(--accent-dim);
 }
 
 .ai-title {
@@ -3248,46 +3248,140 @@ a:focus-visible {
   color: var(--text-muted);
 }
 
-/* Model pill selector */
-.model-selector-row {
+/* Model toggle pill switch */
+.model-toggle-pill {
   display: flex;
+  background: var(--bg-overlay, #1e1e2e);
+  border: 1px solid var(--border, #313244);
+  border-radius: 20px;
+  padding: 2px;
+  width: 100%;
+  gap: 2px;
 }
 
-.model-pill-select {
+.model-toggle-btn {
   flex: 1;
-  appearance: none;
-  -webkit-appearance: none;
-  padding: 7px 12px;
-  background: var(--bg-base);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  border-radius: 18px;
+  padding: 6px 12px;
+  color: var(--text-muted, #a6adc8);
   font-family: var(--font-ui);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-sm, 13px);
   font-weight: 500;
   cursor: pointer;
   outline: none;
-  transition: border-color var(--transition-fast), background var(--transition-fast);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%236c7086' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 12px center;
-  padding-right: 32px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.model-pill-select:hover {
-  border-color: var(--border-active);
-  background-color: rgba(255,255,255,0.03);
+.model-toggle-btn.active {
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-weight: 600;
 }
 
-.model-pill-select:focus {
+.model-toggle-btn:hover:not(.active) {
+  color: var(--text-primary, #cdd6f4);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* AI Welcome Screen styling */
+.ai-welcome-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--text-primary, #cdd6f4);
+  animation: fadeIn 0.3s ease-out;
+}
+
+.welcome-logo-container {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle, var(--accent-dim) 0%, transparent 70%);
+}
+
+.supernova-logo-svg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 0 12px var(--accent-dim));
+}
+
+.welcome-title {
+  font-family: var(--font-ui);
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0 0 8px 0;
+  color: var(--accent);
+}
+
+.welcome-tagline {
+  font-size: 14px;
+  color: var(--text-muted, #a6adc8);
+  margin: 0 0 32px 0;
+  max-width: 240px;
+  line-height: 1.5;
+}
+
+.suggestion-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 280px;
+}
+
+.suggestion-chip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-overlay, #1e1e2e);
+  border: 1px solid var(--border, #313244);
+  border-radius: 12px;
+  padding: 10px 14px;
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: var(--font-ui);
+}
+
+.suggestion-chip:hover {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(203, 166, 247, 0.12);
+  background: var(--accent-dim);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
 
-.model-pill-select option {
-  background: var(--bg-overlay);
-  color: var(--text-primary);
-  padding: 6px;
+.chip-icon {
+  font-size: 16px;
+}
+
+.chip-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #cdd6f4);
+}
+
+/* Animations */
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 /* Agent controls redesign */

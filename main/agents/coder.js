@@ -1,3 +1,9 @@
+/**
+ * Coder Agent (Pollinations Free API — qwen-coder model)
+ * Generates code changes for each task in the SuperNova v1 pipeline.
+ * No API keys required.
+ */
+
 class StreamThinkFilter {
   constructor(onData) {
     this.onData = onData;
@@ -75,14 +81,14 @@ class StreamThinkFilter {
   }
 }
 
-async function runCoder(task, fileContent, priorFeedback, apiKey, onDiffChunk, coderModel) {
+async function runCoder(task, fileContent, priorFeedback, onDiffChunk) {
   const lineCount = fileContent ? fileContent.split(/\r?\n/).length : 0;
   const isFeedbackEmpty = !priorFeedback || priorFeedback.length === 0;
   const forceOptionB = lineCount < 600 || !isFeedbackEmpty;
 
   let systemPrompt = "";
   if (forceOptionB) {
-    systemPrompt = `You are the Lead Software Engineer Agent inside NOVA IDE. Your task is to execute the active architecture plan task and write file modifications.
+    systemPrompt = `You are the Lead Software Engineer Agent inside NOVA IDE, powered by SuperNova v1. Your task is to execute the active architecture plan task and write file modifications.
 
 CRITICAL RULE:
 Because the target file is small (under 600 lines) or is being rewritten after prior mismatch feedback, you MUST use Option B: Full-File Replacement.
@@ -100,7 +106,7 @@ CRITICAL RULES — violating these will cause the task to fail:
 3. Every single import statement that the file needs MUST be present in the output.
 4. Ensure your output is valid, compile-ready syntax for the target language.`;
   } else {
-    systemPrompt = `You are the Lead Software Engineer Agent inside NOVA IDE. Your task is to execute the active architecture plan task and write file modifications.
+    systemPrompt = `You are the Lead Software Engineer Agent inside NOVA IDE, powered by SuperNova v1. Your task is to execute the active architecture plan task and write file modifications.
 
 You MUST output file modifications using ONE of these three formats:
 
@@ -137,31 +143,26 @@ CRITICAL RULES — violating these will cause the task to fail:
   if (task.contextData && task.contextData.workspaceFiles && task.contextData.workspaceFiles.length > 0) {
     const otherFiles = task.contextData.workspaceFiles.filter(f => f.relativePath !== task.assignedFile);
     if (otherFiles.length > 0) {
-      const isFree = !apiKey || apiKey.trim() === "";
-      let allowedFiles = otherFiles;
+      // Filter to only files mentioned in the task description to save context
+      const taskLower = task.description.toLowerCase();
+      let allowedFiles = otherFiles.filter(f => {
+        const base = require('path').basename(f.relativePath).toLowerCase();
+        return taskLower.includes(base) || taskLower.includes(require('path').parse(base).name);
+      });
       
-      if (isFree) {
-        // Filter to only files mentioned in the task description to save context
-        const taskLower = task.description.toLowerCase();
-        allowedFiles = otherFiles.filter(f => {
-          const base = require('path').basename(f.relativePath).toLowerCase();
-          return taskLower.includes(base) || taskLower.includes(require('path').parse(base).name);
-        });
-        
-        // Fallback to first 2 files if no explicit matches
-        if (allowedFiles.length === 0) {
-          allowedFiles = otherFiles.slice(0, 2);
-        }
+      // Fallback to first 2 files if no explicit matches
+      if (allowedFiles.length === 0) {
+        allowedFiles = otherFiles.slice(0, 2);
       }
 
       let text = "";
       let charCount = 0;
-      const maxChars = isFree ? 8000 : 100000;
+      const maxChars = 8000;
 
       for (const f of allowedFiles) {
         const fileBlock = `File: ${f.relativePath}\n\`\`\`\n${f.content}\n\`\`\``;
         if (charCount + fileBlock.length > maxChars) {
-          if (isFree) continue;
+          continue;
         }
         text += "\n\n" + fileBlock;
         charCount += fileBlock.length;
@@ -201,34 +202,16 @@ MANDATORY RETRY INSTRUCTIONS:
 - NEVER leave functions incomplete. NEVER embed <<<<<<< SEARCH markers in actual code.`;
   }
 
-  let model = "qwen/qwen-2.5-coder-32b-instruct:free"; // Default free coder tier
-  if (coderModel) {
-    const modelMap = {
-      qwen: "qwen/qwen-2.5-coder-32b-instruct:free",
-      gemini: "google/gemini-2.5-flash:free",
-      llama: "meta-llama/llama-3.3-70b-instruct:free",
-      deepseek: "deepseek/deepseek-r1:free",
-      gemma: "google/gemma-3-27b-it:free"
-    };
-    if (modelMap[coderModel]) {
-      model = modelMap[coderModel];
-    } else if (coderModel.includes("/")) {
-      model = coderModel;
-    }
-  }
-
   // Truncation detection logic
   function checkTruncation(text) {
     const trimmed = text.trim();
     if (!trimmed) return false;
 
-    // Check Option B (Full File)
     if (forceOptionB || (trimmed.includes("```") && !trimmed.includes("<<<<<<< SEARCH"))) {
       const fences = (trimmed.match(/```/g) || []).length;
-      if (fences % 2 !== 0) return true; // Odd number of fences
+      if (fences % 2 !== 0) return true;
     }
 
-    // Check Option A (Search-and-Replace)
     if (trimmed.includes("<<<<<<< SEARCH")) {
       const lastSearch = trimmed.lastIndexOf("<<<<<<< SEARCH");
       const lastReplace = trimmed.lastIndexOf(">>>>>>> REPLACE");
@@ -239,207 +222,116 @@ MANDATORY RETRY INSTRUCTIONS:
     return false;
   }
 
-  // Encapsulated streaming API request helper
+  // Streaming API request helper — Pollinations only
   const performStreamRequest = async (currentMessages) => {
     let outputText = "";
 
-    if (!apiKey || apiKey.trim() === "") {
-      // Fall back to free Pollinations API
-      const apiURL = "https://text.pollinations.ai/v1/chat/completions";
-      const maxRetries = 5;
-      const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const apiURL = "https://text.pollinations.ai/v1/chat/completions";
+    const maxRetries = 5;
+    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        const controller = new AbortController();
-        const initialTimeout = setTimeout(() => {
-          console.warn("[Coder] Pollinations initial request timed out.");
-          controller.abort();
-        }, 45000);
-
-        try {
-          const response = await fetch(apiURL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              messages: currentMessages,
-              model: "qwen-coder",
-              seed: 42,
-              private: true,
-              stream: true
-            }),
-            signal: controller.signal
-          });
-
-          clearTimeout(initialTimeout);
-
-          if (!response.ok) {
-            throw new Error(`Pollinations free API error ${response.status}`);
-          }
-
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder("utf-8");
-          const filter = new StreamThinkFilter((cleanText) => {
-            outputText += cleanText;
-            onDiffChunk(cleanText);
-          });
-
-          let streamBuffer = "";
-          let heartbeatTimer = setTimeout(() => {
-            console.warn("[Coder] Pollinations stream stalled. Aborting.");
-            controller.abort();
-          }, 20000);
-
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              clearTimeout(heartbeatTimer);
-              if (done) break;
-
-              heartbeatTimer = setTimeout(() => {
-                console.warn("[Coder] Pollinations stream stalled. Aborting.");
-                controller.abort();
-              }, 20000);
-
-              streamBuffer += decoder.decode(value, { stream: true });
-
-              let lineIndex;
-              while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
-                const line = streamBuffer.slice(0, lineIndex).trim();
-                streamBuffer = streamBuffer.slice(lineIndex + 1);
-
-                if (line.startsWith("data:")) {
-                  const dataStr = line.slice(5).trim();
-                  if (dataStr === "[DONE]") continue;
-
-                  try {
-                    const parsed = JSON.parse(dataStr);
-                    const text = parsed?.choices?.[0]?.delta?.content || parsed?.choices?.[0]?.delta?.reasoning || "";
-                    if (text) {
-                      filter.feed(text);
-                    }
-                  } catch (e) {
-                    // Ignore JSON parse errors
-                  }
-                }
-              }
-            }
-          } finally {
-            clearTimeout(heartbeatTimer);
-            try {
-              reader.releaseLock();
-            } catch (e) {}
-          }
-
-          filter.flush();
-          return outputText;
-        } catch (err) {
-          clearTimeout(initialTimeout);
-          if (attempt === maxRetries) {
-            throw err;
-          }
-          const isRateLimitOrServerErr = err.message && (
-            err.message.includes("429") || 
-            err.message.includes("502") || 
-            err.message.includes("503") || 
-            err.message.includes("504")
-          );
-          const retryDelay = isRateLimitOrServerErr ? (attempt * 8000) : (attempt * 3000);
-          console.warn(`[Coder Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying in ${retryDelay / 1000} seconds...]`);
-          onDiffChunk(`\n\n[Nova: Fallback connection failed (${err.message}). Retrying in ${retryDelay / 1000}s...]\n\n`);
-          await delay(retryDelay);
-        }
-      }
-    } else {
-      // Call OpenRouter
-      const apiURL = "https://openrouter.ai/api/v1/chat/completions";
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
       const controller = new AbortController();
       const initialTimeout = setTimeout(() => {
-        console.warn("[Coder] OpenRouter initial request timed out.");
+        console.warn("[Coder] Pollinations initial request timed out.");
         controller.abort();
       }, 45000);
 
-      let response;
+      // Choose model dynamically to handle rate limits (429)
+      const modelToUse = attempt === 1 ? "qwen-coder" : (attempt % 2 === 0 ? "openai" : "llama");
+      
       try {
-        response = await fetch(apiURL, {
+        const response = await fetch(apiURL, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`,
-            "HTTP-Referer": "https://github.com/CodeNebula-Dev/NOVA-IDE",
-            "X-Title": "Nova IDE"
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            model,
             messages: currentMessages,
+            model: modelToUse,
+            seed: 42,
+            private: true,
             stream: true
           }),
           signal: controller.signal
         });
-      } finally {
+
         clearTimeout(initialTimeout);
-      }
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Coder API Error (${response.status}): ${errorText}`);
-      }
+        if (!response.ok) {
+          throw new Error(`Pollinations free API error ${response.status}`);
+        }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      const filter = new StreamThinkFilter((cleanText) => {
-        outputText += cleanText;
-        onDiffChunk(cleanText);
-      });
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        const filter = new StreamThinkFilter((cleanText) => {
+          outputText += cleanText;
+          onDiffChunk(cleanText);
+        });
 
-      let streamBuffer = "";
-      let heartbeatTimer = setTimeout(() => {
-        console.warn("[Coder] OpenRouter stream stalled. Aborting.");
-        controller.abort();
-      }, 20000);
+        let streamBuffer = "";
+        let heartbeatTimer = setTimeout(() => {
+          console.warn("[Coder] Pollinations stream stalled. Aborting.");
+          controller.abort();
+        }, 20000);
 
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          clearTimeout(heartbeatTimer);
-          if (done) break;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            clearTimeout(heartbeatTimer);
+            if (done) break;
 
-          heartbeatTimer = setTimeout(() => {
-            console.warn("[Coder] OpenRouter stream stalled. Aborting.");
-            controller.abort();
-          }, 20000);
+            heartbeatTimer = setTimeout(() => {
+              console.warn("[Coder] Pollinations stream stalled. Aborting.");
+              controller.abort();
+            }, 20000);
 
-          streamBuffer += decoder.decode(value, { stream: true });
+            streamBuffer += decoder.decode(value, { stream: true });
 
-          let lineIndex;
-          while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
-            const line = streamBuffer.slice(0, lineIndex).trim();
-            streamBuffer = streamBuffer.slice(lineIndex + 1);
+            let lineIndex;
+            while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
+              const line = streamBuffer.slice(0, lineIndex).trim();
+              streamBuffer = streamBuffer.slice(lineIndex + 1);
 
-            if (line.startsWith("data:")) {
-              const dataStr = line.slice(5).trim();
-              if (dataStr === "[DONE]") continue;
+              if (line.startsWith("data:")) {
+                const dataStr = line.slice(5).trim();
+                if (dataStr === "[DONE]") continue;
 
-              try {
-                const parsed = JSON.parse(dataStr);
-                const text = parsed?.choices?.[0]?.delta?.content || "";
-                if (text) {
-                  filter.feed(text);
+                try {
+                  const parsed = JSON.parse(dataStr);
+                  const text = parsed?.choices?.[0]?.delta?.content || parsed?.choices?.[0]?.delta?.reasoning || "";
+                  if (text) {
+                    filter.feed(text);
+                  }
+                } catch (e) {
+                  // Ignore JSON parse errors
                 }
-              } catch (e) {
-                // Ignore JSON error
               }
             }
           }
+        } finally {
+          clearTimeout(heartbeatTimer);
+          try {
+            reader.releaseLock();
+          } catch (e) {}
         }
-      } finally {
-        clearTimeout(heartbeatTimer);
-        try {
-          reader.releaseLock();
-        } catch (e) {}
-      }
 
-      filter.flush();
-      return outputText;
+        filter.flush();
+        return outputText;
+      } catch (err) {
+        clearTimeout(initialTimeout);
+        if (attempt === maxRetries) {
+          throw err;
+        }
+        const isRateLimitOrServerErr = err.message && (
+          err.message.includes("429") || 
+          err.message.includes("502") || 
+          err.message.includes("503") || 
+          err.message.includes("504")
+        );
+        const retryDelay = isRateLimitOrServerErr ? (attempt * 8000) : (attempt * 3000);
+        console.warn(`[Coder Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying in ${retryDelay / 1000} seconds...]`);
+        onDiffChunk(`\n\n[SuperNova: Connection failed (${err.message}). Retrying in ${retryDelay / 1000}s...]\n\n`);
+        await delay(retryDelay);
+      }
     }
   };
 
@@ -475,15 +367,13 @@ MANDATORY RETRY INSTRUCTIONS:
       continuationCount++;
       console.log(`[Coder] Output detected as truncated. Triggering continuation ${continuationCount}...`);
 
-      // Feed back the partial assistant answer
       messages.push({ role: "assistant", content: cleanRawChunk });
       messages.push({
         role: "user",
         content: "Your previous response was truncated/cut off. Please CONTINUE writing the rest of the code EXACTLY where you left off. Do NOT repeat any code you already wrote, and do NOT output introductory text. Start immediately with the next characters/lines."
       });
 
-      // Stream a smooth indicator to the UI
-      onDiffChunk("\n\n[Nova: Continuing code generation...]\n\n");
+      onDiffChunk("\n\n[SuperNova: Continuing code generation...]\n\n");
     } else {
       break;
     }
@@ -501,7 +391,6 @@ MANDATORY RETRY INSTRUCTIONS:
 }
 
 function applySearchReplaceBlocks(source, patch) {
-  // 1. Robust state-based parsing of blocks
   const lines = patch.split(/\r?\n/);
   const blocks = [];
   let currentBlock = null;
@@ -535,7 +424,7 @@ function applySearchReplaceBlocks(source, patch) {
     }
   }
 
-  // Fallback for truncated/unclosed blocks (missing final >>>>>>> REPLACE marker)
+  // Fallback for truncated/unclosed blocks
   if (inReplace && currentBlock && currentBlock.search.length > 0) {
     console.log("[Coder] Recovered unclosed search-and-replace block due to truncation.");
     blocks.push({
@@ -546,7 +435,6 @@ function applySearchReplaceBlocks(source, patch) {
 
   if (blocks.length === 0) return null;
 
-  // 2. Normalize source and blocks to LF line endings for robust replacement
   const hasCRLF = source.includes("\r\n");
   let currentSource = source.replace(/\r\n/g, "\n");
 
@@ -554,7 +442,6 @@ function applySearchReplaceBlocks(source, patch) {
     const searchNormalized = block.search.replace(/\r\n/g, "\n");
     const replaceNormalized = block.replace.replace(/\r\n/g, "\n");
 
-    // Skip empty search blocks if they don't make sense
     if (searchNormalized.trim() === "") {
       if (currentSource.trim() === "") {
         currentSource = replaceNormalized;
@@ -564,13 +451,11 @@ function applySearchReplaceBlocks(source, patch) {
       continue;
     }
 
-    // Try exact match first
     if (currentSource.includes(searchNormalized)) {
       currentSource = currentSource.replace(searchNormalized, replaceNormalized);
       continue;
     }
 
-    // Try exact match with trimmed spaces on the whole block
     const searchStr = searchNormalized.trim();
     if (currentSource.includes(searchStr)) {
       currentSource = currentSource.replace(searchStr, replaceNormalized);
@@ -592,7 +477,7 @@ function applySearchReplaceBlocks(source, patch) {
       }
       if (isMatch) {
         matchStartIdx = i;
-        break; // Found contiguous match!
+        break;
       }
     }
 
@@ -633,14 +518,9 @@ function applySearchReplaceBlocks(source, patch) {
   return hasCRLF ? currentSource.replace(/\n/g, "\r\n") : currentSource;
 }
 
-/**
- * Applies a unified diff or search-and-replace string to a source string, returning the modified source string.
- * This is a lightweight robust patch utility for the agent environment.
- */
 function _applyPatchInternal(source, patch) {
   let cleaned = patch.trim();
   
-  // 1. Try to extract markdown code fences or custom tag blocks (handling spaces/newlines robustly)
   const codeBlockMatch = cleaned.match(/```(?:[\w.+-]+)?\s*\r?\n([\s\S]*?)\r?\n\s*```/) || 
                           cleaned.match(/<nova-code>([\s\S]*?)<\/nova-code>/);
   
@@ -648,7 +528,6 @@ function _applyPatchInternal(source, patch) {
   if (codeBlockMatch) {
     codeBlockContent = codeBlockMatch[1].trim();
   } else {
-    // Check for unclosed markdown or tags due to truncation cutoffs (with optional spaces)
     const unclosedCodeBlockMatch = cleaned.match(/```(?:[\w.+-]+)?\s*\r?\n([\s\S]*)$/) ||
                                    cleaned.match(/<nova-code>([\s\S]*)$/);
     if (unclosedCodeBlockMatch) {
@@ -659,7 +538,6 @@ function _applyPatchInternal(source, patch) {
 
   const targetContent = codeBlockContent !== null ? codeBlockContent : cleaned;
 
-  // 2. Check for Search-and-Replace blocks
   if (targetContent.includes("<<<<<<< SEARCH") && targetContent.includes(">>>>>>> REPLACE")) {
     const srPatched = applySearchReplaceBlocks(source, targetContent);
     if (srPatched !== null) {
@@ -667,28 +545,23 @@ function _applyPatchInternal(source, patch) {
     }
   }
 
-  // 3. Determine if it is a unified diff or a complete file replacement.
-  // A valid unified diff MUST contain a header block starting with @@ -L,C +L,C @@.
   const diffHeaderRegex = /@@\s*-\d+,?\d*\s*\+\d+,?\d*\s*@@/;
   const hasDiffHeader = diffHeaderRegex.test(targetContent);
   const hasFileHeaders = targetContent.includes("--- ") && targetContent.includes("+++ ");
 
-  // 4. Fall back to complete file replacement if it does not look like a unified diff.
   if (!hasDiffHeader || (codeBlockContent !== null && !hasFileHeaders)) {
     if (codeBlockContent !== null) {
       return codeBlockContent;
     }
-    // Clean potential git headers from full file outputs
     return cleaned.replace(/^--- .*\n/gm, "").replace(/^\+\+\+ .*\n/gm, "").trim();
   }
 
-  // 5. Parse as a unified diff
+  // Parse as a unified diff
   const lines = source.split(/\r?\n/);
   const patchLines = targetContent.split(/\r?\n/);
   const result = [];
   
   let i = 0;
-  // Find first @@ header
   while (i < patchLines.length) {
     if (patchLines[i].startsWith("@@")) break;
     i++;
@@ -696,7 +569,6 @@ function _applyPatchInternal(source, patch) {
 
   let originalIndex = 0; 
   
-  // Clean line helper for fuzzy matching
   function cleanLine(line) {
     return line.trim().replace(/['"`\s;(),{}]/g, "").toLowerCase();
   }
@@ -750,12 +622,11 @@ function _applyPatchInternal(source, patch) {
       i++;
     }
 
-    // Fuzzy Search for hunkOld
     let matchIndex = -1;
     if (hunkOld.length === 0) {
       matchIndex = Math.max(0, Math.min(startOld, lines.length));
     } else {
-      const searchRadius = 150; // Search 150 lines up and down
+      const searchRadius = 150;
       for (let offset = 0; offset <= searchRadius; offset++) {
         if (checkMatch(lines, hunkOld, startOld + offset)) {
           matchIndex = startOld + offset;
@@ -769,7 +640,6 @@ function _applyPatchInternal(source, patch) {
     }
 
     if (matchIndex !== -1) {
-      // Apply diff hunks safely
       while (originalIndex < matchIndex && originalIndex < lines.length) {
         result.push(lines[originalIndex]);
         originalIndex++;
@@ -777,7 +647,6 @@ function _applyPatchInternal(source, patch) {
       result.push(...hunkNew);
       originalIndex += hunkOld.length;
     } else {
-      // Fallback to strict start line
       while (originalIndex < startOld && originalIndex < lines.length) {
         result.push(lines[originalIndex]);
         originalIndex++;
@@ -830,7 +699,6 @@ function cleanContinuationPrefix(text) {
   if (!text) return "";
   let cleaned = text.trim();
   
-  // Regex to match conversational continuation headers securely
   const prefixRegexes = [
     /^(?:Here\s+is\s+the|Here's\s+the|Sure,\s+here's\s+the|Sure,\s+here\s+is\s+the|Certainly,\s+here\s+is\s+the)\s+(?:rest\s+of\s+the|continuation\s+of\s+the|remaining|continued)?\s*(?:code|file|script|implementation|imports|functions)(?:\s+from\s+where\s+it\s+was\s+cut\s+off|\s+due\s+to\s+truncation|\s+from\s+the\s+truncation\s+point)?:?\s*\r?\n?/i,
     /^(?:Continuing(?:\s+code|\s+file|\s+script|\s+implementation|\s+imports|\s+functions)?(?:\s+from\s+where\s+it\s+was\s+cut\s+off|\s+due\s+to\s+truncation|\s+from\s+the\s+truncation\s+point)?|Continuing\s+from\s+where\s+we\s+left\s+off|Continuing\s+from\s+the\s+truncation\s+point|Your\s+previous\s+response\s+was\s+truncated\.?\s+Here\s+is\s+the\s+continuation|Here\s+is\s+the\s+continuation):?\s*\r?\n?/i
@@ -864,14 +732,12 @@ function cleanPollinationsAd(text) {
 function extractCodeFromResponse(text) {
   const cleaned = cleanPollinationsAd(text.trim());
   
-  // Try to find a completed code block (handling spaces/newlines robustly)
   const codeBlockMatch = cleaned.match(/```(?:[\w.+-]+)?\s*\r?\n([\s\S]*?)\r?\n\s*```/) || 
                           cleaned.match(/<nova-code>([\s\S]*?)<\/nova-code>/);
   if (codeBlockMatch) {
     return cleanContinuationPrefix(codeBlockMatch[1].trim());
   }
   
-  // Try to find an unclosed code block due to truncation (with optional spaces)
   const unclosedMatch = cleaned.match(/```(?:[\w.+-]+)?\s*\r?\n([\s\S]*)$/) ||
                         cleaned.match(/<nova-code>([\s\S]*)$/);
   if (unclosedMatch) {
@@ -879,7 +745,6 @@ function extractCodeFromResponse(text) {
   }
   
   let code = cleaned;
-  // If there's a closing fence but no opening fence in this chunk:
   if (!code.startsWith("```") && code.includes("```")) {
     const idx = code.lastIndexOf("```");
     code = code.slice(0, idx).trim();
@@ -897,4 +762,3 @@ module.exports = {
   cleanPollinationsAd,
   extractCodeFromResponse
 };
-

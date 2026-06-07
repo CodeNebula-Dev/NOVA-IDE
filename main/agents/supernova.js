@@ -1,7 +1,15 @@
 /**
- * Valkyrie Agent Harness Engine
- * Coordinates Multi-Agent Planner -> Coder -> Reviewer lifecycle,
- * writes physical snapshots, and logs checkpoints to SQLite.
+ * SuperNova v1 AI Engine
+ * 
+ * The unified AI engine for Nova IDE.
+ * Absorbs the Valkyrie multi-agent orchestration (Plan → Code → Review)
+ * and routes everything through Pollinations.ai — completely free, zero API keys.
+ * 
+ * Architecture:
+ *   1. PLANNING  — Pollinations (openai model) decomposes the user request into tasks
+ *   2. CODING    — Pollinations (qwen-coder model) generates code changes per task
+ *   3. REVIEWING — Pollinations (openai model) reviews code quality and syntax
+ *   4. APPLYING  — In-memory patch verification + disk write with checkpoint backup
  */
 
 const fs = require('fs/promises');
@@ -13,7 +21,7 @@ const { runPlanner } = require('./planner');
 const { runCoder, applyPatch } = require('./coder');
 const { runReviewer } = require('./reviewer');
 
-class ValkyrieEngine {
+class SuperNovaEngine {
   constructor(mainWindow, db, workspaceRoot) {
     this.mainWindow = mainWindow;
     this.db = db;
@@ -25,16 +33,19 @@ class ValkyrieEngine {
     this.aborted = true;
   }
 
-  // Sends raw stream updates to the renderer
+  /** Sends stream updates to the renderer */
   emit(channel, payload) {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send(channel, payload);
     }
   }
 
-  async run(conversationId, userPrompt, activeFilePath, apiKeys) {
+  /**
+   * Main execution pipeline: Plan → Code → Review → Apply
+   */
+  async run(conversationId, userPrompt, activeFilePath) {
     this.aborted = false;
-    this.emit('valkyrie:status', { status: 'planning', message: 'Consulting DeepSeek R1...' });
+    this.emit('supernova:status', { status: 'planning', message: 'SuperNova is analyzing your request...' });
 
     // 1. Gather all file contexts
     let activeFileContent = "";
@@ -47,7 +58,7 @@ class ValkyrieEngine {
       }
     }
 
-    // Load workspace tree in summary
+    // Load workspace tree summary
     const treeText = await this.buildTreeTextSummary();
 
     // Smart workspace-wide file reading
@@ -80,7 +91,7 @@ class ValkyrieEngine {
 
       const filesToRead = [];
       if (totalSize < readLimitBytes) {
-        // Small workspace: read all text files!
+        // Small workspace: read all text files
         filesToRead.push(...allFiles);
       } else {
         // Large workspace: read only active file, mentioned files, and key project configs
@@ -94,7 +105,7 @@ class ValkyrieEngine {
         }
       }
 
-      // Load contents for selected files (avoid reading the active file twice)
+      // Load contents for selected files
       for (const file of filesToRead) {
         try {
           const isTargetActive = activeFilePath && (file.relativePath === activeFilePath || path.resolve(this.workspaceRoot, file.relativePath) === path.resolve(this.workspaceRoot, activeFilePath));
@@ -118,24 +129,51 @@ class ValkyrieEngine {
       workspaceFiles
     };
 
-    // --- STEP 1: PLANNING (DeepSeek R1) ---
+    // Check if the prompt can be handled locally (offline)
+    const localResponse = tryExecuteLocally(userPrompt, contextData);
+    if (localResponse) {
+      this.emit('supernova:thought-chunk', { conversationId, chunk: "Processing request locally...\n" });
+      const localPlan = [{
+        id: "task-1",
+        description: "Respond to user query",
+        assignedFile: activeFilePath || "general-chat"
+      }];
+      this.emit('supernova:plan-update', { conversationId, plan: localPlan, isFinal: true });
+      this.emit('supernova:task-update', { taskId: "task-1", status: 'in-progress' });
+      
+      this.emit('supernova:diff-chunk', { conversationId, chunk: localResponse, taskId: "task-1" });
+      
+      this.emit('supernova:task-update', { taskId: "task-1", status: 'completed' });
+      this.emit('supernova:status', { status: 'idle', message: 'SuperNova finished successfully!' });
+      const localResults = [{
+        task: localPlan[0],
+        filePath: localPlan[0].assignedFile,
+        checkpointId: null,
+        diff: localResponse,
+        originalContent: "",
+        proposedContent: localResponse
+      }];
+      this.emit('supernova:completed', { conversationId, results: localResults });
+      return localResults;
+    }
+
+    // --- STEP 1: PLANNING ---
     let plan = [];
     try {
       plan = await runPlanner(
         userPrompt, 
-        contextData, 
-        apiKeys.openrouter,
+        contextData,
         (thoughtChunk) => {
-          if (this.aborted) throw new Error("Valkyrie Aborted");
-          this.emit('valkyrie:thought-chunk', { conversationId, chunk: thoughtChunk });
+          if (this.aborted) throw new Error("SuperNova Aborted");
+          this.emit('supernova:thought-chunk', { conversationId, chunk: thoughtChunk });
         },
         (partialPlan, isFinal) => {
-          if (this.aborted) throw new Error("Valkyrie Aborted");
-          this.emit('valkyrie:plan-update', { conversationId, plan: partialPlan, isFinal });
+          if (this.aborted) throw new Error("SuperNova Aborted");
+          this.emit('supernova:plan-update', { conversationId, plan: partialPlan, isFinal });
         }
       );
     } catch (err) {
-      this.emit('valkyrie:error', { message: `Planning failed: ${err.message}` });
+      this.emit('supernova:error', { message: `Planning failed: ${err.message}` });
       return null;
     }
 
@@ -147,21 +185,21 @@ class ValkyrieEngine {
     for (let i = 0; i < plan.length; i++) {
       if (this.aborted) break;
       const task = plan[i];
-      task.contextData = contextData; // Share the workspace files and active file context
+      task.contextData = contextData;
       task.status = 'in-progress';
-      this.emit('valkyrie:task-update', { taskId: task.id, status: 'in-progress' });
+      this.emit('supernova:task-update', { taskId: task.id, status: 'in-progress' });
 
       let attempts = 0;
       const maxAttempts = 3;
       let approved = false;
       let proposedDiff = "";
-      let bestDiff = ""; // Track the best (non-empty) diff seen across all attempts
+      let bestDiff = "";
       let taskFileContent = "";
       const priorFeedback = [];
 
       const targetFileAbsPath = path.resolve(this.workspaceRoot, task.assignedFile);
       
-      // Load current target file contents (might be newly created or updated by earlier tasks)
+      // Load current target file contents
       try {
         if (virtualFilesystem.has(task.assignedFile)) {
           taskFileContent = virtualFilesystem.get(task.assignedFile);
@@ -177,30 +215,28 @@ class ValkyrieEngine {
       while (!approved && attempts < maxAttempts) {
         if (this.aborted) break;
         attempts++;
-        this.emit('valkyrie:status', { 
+        this.emit('supernova:status', { 
           status: 'coding', 
           message: `Task ${i+1}/${plan.length}: Writing code changes... (Attempt ${attempts}/${maxAttempts})` 
         });
 
-        // Generate changes using Qwen3-Coder
+        // Generate changes
         try {
           proposedDiff = await runCoder(
             task, 
             taskFileContent, 
-            priorFeedback, 
-            apiKeys.openrouter,
+            priorFeedback,
             (diffChunk) => {
-              if (this.aborted) throw new Error("Valkyrie Aborted");
-              this.emit('valkyrie:diff-chunk', { conversationId, chunk: diffChunk, taskId: task.id });
-            },
-            apiKeys.coderModel
+              if (this.aborted) throw new Error("SuperNova Aborted");
+              this.emit('supernova:diff-chunk', { conversationId, chunk: diffChunk, taskId: task.id });
+            }
           );
-          // Track the best (longest/most complete) non-empty diff across attempts
+          // Track the best non-empty diff across attempts
           if (proposedDiff && proposedDiff.trim().length > (bestDiff ? bestDiff.trim().length : 0)) {
             bestDiff = proposedDiff;
           }
         } catch (err) {
-          this.emit('valkyrie:error', { message: `Coder failed at task "${task.description}": ${err.message}` });
+          this.emit('supernova:error', { message: `Coder failed at task "${task.description}": ${err.message}` });
           return null;
         }
 
@@ -225,7 +261,7 @@ class ValkyrieEngine {
           patchErrorMsg = err.message;
         }
 
-        // Verify syntax correctness of the resulting file
+        // Verify syntax correctness
         if (!patchFailed) {
           const syntaxCheck = checkSyntax(attemptPatchedContent, task.assignedFile);
           if (!syntaxCheck.valid) {
@@ -235,7 +271,7 @@ class ValkyrieEngine {
         }
 
         if (patchFailed) {
-          this.emit('valkyrie:review-status', { 
+          this.emit('supernova:review-status', { 
             taskId: task.id, 
             attempt: attempts, 
             approved: false, 
@@ -244,30 +280,29 @@ class ValkyrieEngine {
           });
 
           priorFeedback.push(`Attempt ${attempts} Feedback (Score: 0/100):\n⚠️ Patch Application Failed: ${patchErrorMsg}`);
-          continue; // Instantly trigger self-healing retry!
+          continue;
         }
 
-        // Run Quality Review using Groq Llama 3.3
-        this.emit('valkyrie:status', { 
+        // Run Quality Review
+        this.emit('supernova:status', { 
           status: 'reviewing', 
           message: `Task ${i+1}/${plan.length}: Reviewing code quality...` 
         });
 
         let reviewResult = null;
         try {
-          reviewResult = await runReviewer(task, taskFileContent, proposedDiff, apiKeys);
+          reviewResult = await runReviewer(task, taskFileContent, proposedDiff);
         } catch (err) {
-          // Reviewer network/parse error — non-blocking. Treat as soft pass if we have a diff.
           console.warn("Reviewer threw an error (non-blocking):", err.message);
           reviewResult = { approved: true, score: 70, feedback: `Reviewer error (auto-approved): ${err.message}`, issues: [] };
         }
 
-        // Normalise result — ensure we always have an object
+        // Normalise result
         if (!reviewResult || typeof reviewResult !== 'object') {
           reviewResult = { approved: true, score: 70, feedback: 'Reviewer returned null (auto-approved).', issues: [] };
         }
 
-        this.emit('valkyrie:review-status', { 
+        this.emit('supernova:review-status', { 
           taskId: task.id, 
           attempt: attempts, 
           approved: reviewResult.approved, 
@@ -282,12 +317,11 @@ class ValkyrieEngine {
         if (reviewResult.approved || scorePassThreshold) {
           approved = true;
         } else if (attempts === maxAttempts && (currentDiffHasContent || bestDiff)) {
-          // Last chance: apply best diff seen even if reviewer score is low
           if (!currentDiffHasContent && bestDiff) {
-            proposedDiff = bestDiff; // Fall back to best previous attempt
+            proposedDiff = bestDiff;
           }
           approved = true;
-          this.emit('valkyrie:status', {
+          this.emit('supernova:status', {
             status: 'coding',
             message: `Task ${i+1}/${plan.length}: Reviewer score low (${reviewResult.score}/100) — applying best-effort changes.`
           });
@@ -297,7 +331,7 @@ class ValkyrieEngine {
       }
 
       if (!approved && !this.aborted) {
-        // Ultimate safety net: use the best diff seen across all attempts but ONLY if it produces syntax-clean code!
+        // Ultimate safety net
         const diffToApply = bestDiff || proposedDiff;
         let bestPatchedContent = "";
         let bestPatchSyntaxValid = false;
@@ -315,17 +349,16 @@ class ValkyrieEngine {
         if (bestPatchSyntaxValid) {
           proposedDiff = diffToApply;
           approved = true;
-          this.emit('valkyrie:status', {
+          this.emit('supernova:status', {
             status: 'coding',
             message: `Task ${i+1}/${plan.length}: Applying best-effort changes after ${maxAttempts} review cycles.`
           });
         } else {
-          this.emit('valkyrie:error', { 
-            message: `Valkyrie Engine: Coder failed to produce syntax-clean code for task "${task.description}" after ${maxAttempts} attempts. Skipping task.` 
+          this.emit('supernova:error', { 
+            message: `SuperNova Engine: Coder failed to produce syntax-clean code for task "${task.description}" after ${maxAttempts} attempts. Skipping task.` 
           });
-          // Skip this task but continue with remaining tasks (don't abort the whole plan)
           task.status = 'failed';
-          this.emit('valkyrie:task-update', { taskId: task.id, status: 'failed' });
+          this.emit('supernova:task-update', { taskId: task.id, status: 'failed' });
           continue;
         }
       }
@@ -351,7 +384,7 @@ class ValkyrieEngine {
       }
 
       task.status = 'completed';
-      this.emit('valkyrie:task-update', { taskId: task.id, status: 'completed' });
+      this.emit('supernova:task-update', { taskId: task.id, status: 'completed' });
       
       executionResults.push({
         task,
@@ -362,10 +395,9 @@ class ValkyrieEngine {
         proposedContent: patchedContent
       });
 
-      // Small rate limit cooldown for Pollinations free API
-      const isFree = !apiKeys.openrouter || apiKeys.openrouter.trim() === "";
-      if (isFree && i < plan.length - 1) {
-        this.emit('valkyrie:status', { 
+      // Rate limit cooldown for Pollinations free API
+      if (i < plan.length - 1) {
+        this.emit('supernova:status', { 
           status: 'idle', 
           message: `Task ${i+1}/${plan.length} complete. Cooling down for 5s to avoid rate limits...` 
         });
@@ -374,17 +406,17 @@ class ValkyrieEngine {
     }
 
     if (this.aborted) {
-      this.emit('valkyrie:status', { status: 'aborted', message: 'Harness Execution Aborted.' });
+      this.emit('supernova:status', { status: 'aborted', message: 'SuperNova execution aborted.' });
       return null;
     }
 
-    // Success! Return final approved list
-    this.emit('valkyrie:status', { status: 'idle', message: 'Valkyrie finished successfully!' });
-    this.emit('valkyrie:completed', { conversationId, results: executionResults });
+    // Success!
+    this.emit('supernova:status', { status: 'idle', message: 'SuperNova finished successfully!' });
+    this.emit('supernova:completed', { conversationId, results: executionResults });
     return executionResults;
   }
 
-  // Backup files inside .nova/checkpoints/
+  /** Backup files inside .nova/checkpoints/ */
   async createCheckpoint(conversationId, relativePath, originalContent) {
     const checkpointsDir = path.join(this.workspaceRoot, '.nova', 'checkpoints');
     if (!fsSync.existsSync(checkpointsDir)) {
@@ -396,10 +428,8 @@ class ValkyrieEngine {
     const backupFileName = `${sha}_${path.basename(relativePath)}`;
     const backupFilePath = path.join(checkpointsDir, backupFileName);
 
-    // Save backup file
     await fs.writeFile(backupFilePath, originalContent, 'utf8');
 
-    // SQLite persist
     const stmt = this.db.prepare(`
       INSERT INTO checkpoints (id, conversation_id, file_path, original_sha, backup_file_path)
       VALUES (?, ?, ?, ?, ?)
@@ -435,7 +465,6 @@ class ValkyrieEngine {
         const name = entry.name;
         const nameLower = name.toLowerCase();
         
-        // Skip ignored directories, cache files, or hidden directories starting with '.'
         if (IGNORED_DIRS.has(nameLower) || (entry.isDirectory() && name.startsWith('.'))) {
           continue;
         }
@@ -481,7 +510,7 @@ class ValkyrieEngine {
 
     try {
       const getTree = async (dir, depth = 0) => {
-        if (depth > 2) return ""; // Limit depth to keep context small
+        if (depth > 2) return "";
         const entries = await fs.readdir(dir, { withFileTypes: true });
         let text = "";
         for (const entry of entries) {
@@ -507,7 +536,7 @@ class ValkyrieEngine {
 function checkSyntax(code, filepath) {
   const ext = path.extname(filepath).toLowerCase();
   
-  // 1. Basic structural completeness check first (unbalanced fences/stray markers)
+  // Basic structural completeness check
   if (code.includes("<<<<<<< SEARCH") || code.includes(">>>>>>> REPLACE") || code.includes("=======")) {
     return { valid: false, reason: "Final code contains stray Search-and-Replace markers." };
   }
@@ -545,7 +574,6 @@ function checkSyntax(code, filepath) {
       fs.writeFileSync(tempFilePath, code, 'utf8');
       const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
       
-      // Execute py_compile and capture stderr
       try {
         execSync(`${pythonCmd} -m py_compile "${tempFilePath}"`, { stdio: 'pipe' });
         return { valid: true };
@@ -568,6 +596,50 @@ function checkSyntax(code, filepath) {
   return { valid: true };
 }
 
+function tryExecuteLocally(prompt, contextData) {
+  const cleanPrompt = prompt.toLowerCase().trim().replace(/[?.,!]/g, "");
+  
+  const helpTriggers = [
+    "what are you", "what can you do", "who are you", "help", 
+    "supernova help", "about", "about supernova", "what is this",
+    "tell me about yourself", "capabilities", "features"
+  ];
+  
+  if (helpTriggers.some(t => cleanPrompt.includes(t) || (t.includes(cleanPrompt) && cleanPrompt.length > 3))) {
+    return `⚡ **SuperNova v1 AI Engine** ⚡
+
+I am your built-in, zero-setup AI assistant inside Nova IDE!
+
+Here is what I can do for you:
+1. **Multi-Agent Coding Tasks**: Put me in **SuperNova v1** mode and describe complex coding tasks. I will:
+   - **Plan**: Break down your task into step-by-step checklists.
+   - **Code**: Automatically write patch files using high-precision code models.
+   - **Review**: Review code quality, logic correctness, and syntax validity.
+   - **Apply**: Safely verify patches and save changes to disk with automatic checkpoint backups.
+2. **Simple Chat & Code QA**: Select **GPT OSS 20B** to ask coding questions, explain code snippets, or draft algorithms.
+3. **Workspace-Wide Context**: I scan your open directory automatically to understand imports, configuration files, and project layout.
+4. **Resiliency**: If default servers rate-limit or fail, I dynamically alternate between multiple alternative free models (Qwen-Coder, Llama 3.3, Mistral, Gemma) to bypass overloads.
+
+No API keys are required. What should we build today?`;
+  }
+
+  const listTriggers = [
+    "list files", "show files", "show project tree", "what files are in this workspace",
+    "workspace structure", "project structure", "show directory", "list directory"
+  ];
+  if (listTriggers.some(t => cleanPrompt.includes(t))) {
+    const tree = contextData.treeText || "No workspace opened yet. Open a folder to view files!";
+    return `Here is the current directory structure of your workspace:\n\n\`\`\`\n${tree}\n\`\`\``;
+  }
+
+  const greetingTriggers = ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"];
+  if (greetingTriggers.some(t => cleanPrompt === t)) {
+    return `Hello! I am SuperNova v1, your built-in AI assistant. How can I help you write or debug code today?`;
+  }
+
+  return null;
+}
+
 module.exports = {
-  ValkyrieEngine
+  SuperNovaEngine
 };

@@ -119,7 +119,7 @@ const state = {
   provider: "pollinations",
   mode: "chat",
   modelKey: "gemma",
-  selectedAgent: "valkyrie", // 'valkyrie', 'deepseek', 'qwen', 'llama'
+  selectedAgent: "supernova-v1", // 'supernova-v1', 'gpt-oss-20b'
   terminalVisible: false,
   chatMessages: [],
   apiMessages: [],
@@ -249,19 +249,7 @@ async function init() {
   initResizableHandles();
   updateLayoutToggleButtons();
 
-  // Load API Keys from Environment Variables (fallback to LocalStorage)
-  try {
-    const envKeys = await window.novaAPI.valkyrie.getEnvKeys();
-    els.openRouterKeyInput.value = envKeys.openrouter || localStorage.getItem("openRouterKey") || "";
-    if (els.groqKeyInput) {
-      els.groqKeyInput.value = envKeys.groq || localStorage.getItem("groqKey") || "";
-    }
-  } catch (err) {
-    els.openRouterKeyInput.value = localStorage.getItem("openRouterKey") || "";
-    if (els.groqKeyInput) {
-      els.groqKeyInput.value = localStorage.getItem("groqKey") || "";
-    }
-  }
+  // API Keys are no longer used since SuperNova v1 and GPT OSS 20B are zero-setup and free.
 
   // 1. Initialize Monaco Editor
   await initMonaco();
@@ -287,35 +275,35 @@ async function init() {
   }
 
   // 5. Register Valkyrie events
-  if (window.novaAPI.valkyrie) {
-    window.novaAPI.valkyrie.onEvent("valkyrie:thought-chunk", (data) => {
+  // 5. Register SuperNova events
+  if (window.novaAPI.supernova) {
+    window.novaAPI.supernova.onEvent("supernova:thought-chunk", (data) => {
       updateActiveValkyrieCard('thought', data.chunk);
     });
-    window.novaAPI.valkyrie.onEvent("valkyrie:plan-update", (data) => {
+    window.novaAPI.supernova.onEvent("supernova:plan-update", (data) => {
       updateActiveValkyrieCard('plan', data.plan);
     });
-    window.novaAPI.valkyrie.onEvent("valkyrie:task-update", (data) => {
+    window.novaAPI.supernova.onEvent("supernova:task-update", (data) => {
       updateActiveValkyrieCard('task', data);
     });
-    window.novaAPI.valkyrie.onEvent("valkyrie:diff-chunk", (data) => {
+    window.novaAPI.supernova.onEvent("supernova:diff-chunk", (data) => {
       updateActiveValkyrieCard('diff', data.chunk);
     });
-    window.novaAPI.valkyrie.onEvent("valkyrie:review-status", (data) => {
+    window.novaAPI.supernova.onEvent("supernova:review-status", (data) => {
       updateActiveValkyrieCard('review', data);
     });
-    window.novaAPI.valkyrie.onEvent("valkyrie:status", (data) => {
+    window.novaAPI.supernova.onEvent("supernova:status", (data) => {
       updateActiveValkyrieCard('status', data.message);
     });
-    window.novaAPI.valkyrie.onEvent("valkyrie:completed", (data) => {
+    window.novaAPI.supernova.onEvent("supernova:completed", (data) => {
       updateActiveValkyrieCard('completed', data);
     });
-    window.novaAPI.valkyrie.onEvent("valkyrie:error", (data) => {
+    window.novaAPI.supernova.onEvent("supernova:error", (data) => {
       updateActiveValkyrieCard('error', data.message);
-      addChatMessage("system", `❌ Valkyrie Engine: ${data.message}`);
+      addChatMessage("system", `❌ SuperNova Engine: ${data.message}`);
     });
   }
 
-  addChatMessage("assistant", "Nova agent is ready. I'll include the active Monaco file as context in every request.");
   updateStatusBar();
   initGit();
 }
@@ -597,6 +585,39 @@ function bindEvents() {
     syncAgentModeUI();
     syncProviderUI();
     console.log(`🤖 Agent mode changed to: ${state.selectedAgent}`);
+  });
+
+  // Model Toggle Pill click handlers
+  const btnSupernova = document.getElementById("btnSupernova");
+  const btnGptOss = document.getElementById("btnGptOss");
+
+  btnSupernova?.addEventListener("click", () => {
+    state.selectedAgent = "supernova-v1";
+    if (els.modelModeSelect) {
+      els.modelModeSelect.value = "supernova-v1";
+      els.modelModeSelect.dispatchEvent(new Event("change"));
+    }
+  });
+
+  btnGptOss?.addEventListener("click", () => {
+    state.selectedAgent = "gpt-oss-20b";
+    if (els.modelModeSelect) {
+      els.modelModeSelect.value = "gpt-oss-20b";
+      els.modelModeSelect.dispatchEvent(new Event("change"));
+    }
+  });
+
+  // Suggestion chips click handlers
+  const suggestionChips = document.querySelectorAll(".suggestion-chip");
+  suggestionChips.forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const promptText = chip.getAttribute("data-prompt");
+      if (promptText && els.agentPromptInput) {
+        els.agentPromptInput.value = promptText;
+        // Automatically send the prompt
+        handleSendToAgent();
+      }
+    });
   });
 
   // ========== NEW: STICKY AGENT PANEL EVENTS ==========
@@ -1034,8 +1055,20 @@ function toggleSidebar() {
   if (!sidebar) return;
   const isCollapsed = sidebar.classList.toggle('collapsed');
   
-  if (handle) {
-    handle.classList.toggle('hidden', isCollapsed);
+  if (isCollapsed) {
+    sidebar.style.width = '0px';
+    sidebar.style.minWidth = '0px';
+    if (handle) {
+      handle.classList.add('hidden');
+    }
+  } else {
+    // Restore size from localStorage or fallback to default
+    const savedWidth = localStorage.getItem('nova.sidebarWidth') || '240';
+    sidebar.style.width = savedWidth + 'px';
+    sidebar.style.minWidth = savedWidth + 'px';
+    if (handle) {
+      handle.classList.remove('hidden');
+    }
   }
   
   // Update activity bar active class
@@ -1143,9 +1176,20 @@ function syncAgentModeUI() {
   if (els.modelModeSelect && els.modelModeSelect.value !== state.selectedAgent) {
     els.modelModeSelect.value = state.selectedAgent;
   }
+
+  const btnSupernova = document.getElementById("btnSupernova");
+  const btnGptOss = document.getElementById("btnGptOss");
+  if (state.selectedAgent === "supernova-v1") {
+    btnSupernova?.classList.add("active");
+    btnGptOss?.classList.remove("active");
+  } else {
+    btnGptOss?.classList.add("active");
+    btnSupernova?.classList.remove("active");
+  }
+
   els.agentBadges?.forEach((badge) => {
     const badgeMode = BADGE_ROLE_TO_MODEL_MODE[badge.dataset.role];
-    const shouldBeActive = state.selectedAgent !== "valkyrie" && badgeMode === state.selectedAgent;
+    const shouldBeActive = state.selectedAgent !== "supernova-v1" && badgeMode === state.selectedAgent;
     badge.classList.toggle("active", shouldBeActive);
     badge.classList.toggle("inactive", !shouldBeActive);
   });
@@ -1727,7 +1771,9 @@ function getCursorPosition() {
 }
 
 function updateContextLabel() {
-  els.contextFileLabel.textContent = state.activePath || "No file selected";
+  if (els.contextFileLabel) {
+    els.contextFileLabel.textContent = state.activePath || "No file selected";
+  }
 }
 
 function getSuggestedBasePath() {
@@ -1939,6 +1985,7 @@ async function handleDeleteNode(node) {
 }
 
 function renderModelOptions() {
+  if (!els.modelSelect) return;
   els.modelSelect.innerHTML = "";
   for (const [key, config] of Object.entries(MODEL_CONFIG)) {
     const option = document.createElement("option");
@@ -1947,8 +1994,8 @@ function renderModelOptions() {
     els.modelSelect.appendChild(option);
   }
   els.modelSelect.value = state.modelKey;
-  els.modeSelect.value = state.mode;
-  els.providerSelect.value = state.provider;
+  if (els.modeSelect) els.modeSelect.value = state.mode;
+  if (els.providerSelect) els.providerSelect.value = state.provider;
 }
 
 function syncProviderUI() {
@@ -1981,7 +2028,7 @@ function syncProviderUI() {
   
   if (isRapidChat) {
     // Hide key wrappers and configurations
-    els.openRouterKeyWrap.classList.add("hidden");
+    els.openRouterKeyWrap?.classList.add("hidden");
     if (els.groqKeyWrap) {
       els.groqKeyWrap.classList.add("hidden");
     }
@@ -1997,17 +2044,19 @@ function syncProviderUI() {
   
   const showKeys = isOpenRouter || isEditMode;
 
-  els.openRouterKeyWrap.classList.toggle("hidden", !showKeys);
+  els.openRouterKeyWrap?.classList.toggle("hidden", !showKeys);
   if (els.groqKeyWrap) {
     els.groqKeyWrap.classList.toggle("hidden", !showKeys);
   }
   
-  if (isEditMode) {
-    els.modelHint.textContent = "⚡ Edit mode activates the Valkyrie Multi-Agent cohort (DeepSeek R1 + Qwen Coder + Llama 3.3). API Keys are required.";
-  } else {
-    els.modelHint.textContent = isOpenRouter
-      ? `OpenRouter model: ${model?.openrouterModel || "default"} (free-tier availability can vary).`
-      : `Pollinations model: ${model?.pollinationsModel || "default"} (no API key required).`;
+  if (els.modelHint) {
+    if (isEditMode) {
+      els.modelHint.textContent = "⚡ Edit mode activates the Valkyrie Multi-Agent cohort (DeepSeek R1 + Qwen Coder + Llama 3.3). API Keys are required.";
+    } else {
+      els.modelHint.textContent = isOpenRouter
+        ? `OpenRouter model: ${model?.openrouterModel || "default"} (free-tier availability can vary).`
+        : `Pollinations model: ${model?.pollinationsModel || "default"} (no API key required).`;
+    }
   }
 }
 
@@ -2182,6 +2231,15 @@ function addChatMessage(role, content) {
 }
 
 function renderChatMessages() {
+  const welcomeScreen = document.getElementById("aiWelcomeScreen");
+  if (state.chatMessages.length > 0) {
+    welcomeScreen?.classList.add("hidden");
+    els.chatMessages.classList.remove("hidden");
+  } else {
+    welcomeScreen?.classList.remove("hidden");
+    els.chatMessages.classList.add("hidden");
+  }
+
   els.chatMessages.innerHTML = "";
   for (const message of state.chatMessages) {
     const chatMsg = document.createElement("div");
@@ -2410,6 +2468,56 @@ function buildFileTreeContext() {
   ].join("\n");
 }
 
+function isQueryConversational(prompt) {
+  const clean = prompt.toLowerCase().trim().replace(/[?.,!]/g, "");
+  
+  // Basic offline local triggers (greetings, capabilities, listing)
+  const localTriggers = [
+    "what are you", "what can you do", "who are you", "help", 
+    "supernova help", "about", "about supernova", "what is this",
+    "tell me about yourself", "capabilities", "features",
+    "list files", "show files", "show project tree", "what files are in this workspace",
+    "hello", "hi", "hey", "good morning", "good afternoon", "good evening"
+  ];
+  if (localTriggers.some(t => clean.includes(t) || t.includes(clean) && clean.length > 3)) {
+    return true;
+  }
+
+  // Conversation keywords
+  const chatKeywords = [
+    "explain", "what is", "how do I", "why", "how does", "what does", 
+    "tell me about", "describe", "meaning of", "analyze", "question", 
+    "suggest", "recommend", "how to"
+  ];
+
+  // Modification keywords
+  const editKeywords = [
+    "create", "write", "make", "add", "change", "edit", "implement", 
+    "delete", "remove", "fix", "refactor", "update", "modify", "rewrite", 
+    "patch", "apply"
+  ];
+
+  const hasChat = chatKeywords.some(kw => clean.includes(kw));
+  const hasEdit = editKeywords.some(kw => clean.includes(kw));
+
+  // If it contains chat keywords and NO edit keywords, it is conversational
+  if (hasChat && !hasEdit) {
+    return true;
+  }
+
+  // General questions (starts with question words: what, why, how, who, when)
+  if (/^(what|why|how|who|when|explain)\b/.test(clean)) {
+    if (!hasEdit) return true;
+  }
+
+  // If it's short and doesn't contain any file operations or edits, default to conversational chat
+  if (clean.split(/\s+/).length < 5 && !hasEdit) {
+    return true;
+  }
+
+  return false;
+}
+
 async function handleSendToAgent() {
   const prompt = (els.agentPromptInput?.value || els.agentInput?.value || "").trim();
   if (!prompt) {
@@ -2475,17 +2583,23 @@ async function handleSendToAgent() {
 
   try {
     // ========== DETERMINE MODE ==========
-    const selectedAgent = state.selectedAgent || 'valkyrie';
-    const mode = selectedAgent === 'valkyrie' ? 'multi-agent' : 'single-agent';
+    const selectedAgent = state.selectedAgent || 'supernova-v1';
+    let mode = selectedAgent === 'supernova-v1' ? 'multi-agent' : 'single-agent';
+
+    if (selectedAgent === 'supernova-v1' && isQueryConversational(prompt)) {
+      mode = 'single-agent';
+      console.log("ℹ️ Routing conversational prompt to chat mode");
+    }
 
     console.log(`🚀 Sending prompt with mode: ${mode}`);
 
     if (mode === 'multi-agent') {
-      // ========== VALKYRIE MULTI-AGENT MODE ==========
-      await handleValkyrieExecution(enhancedPrompt);
+      // ========== SUPERNOVA MULTI-AGENT MODE ==========
+      await handleSupernovaExecution(enhancedPrompt);
     } else {
-      // ========== SINGLE AGENT MODE (RapidChat, etc) ==========
-      await handleSingleAgentExecution(enhancedPrompt, selectedAgent);
+      // ========== SINGLE AGENT MODE (GPT OSS 20B / SuperNova v1) ==========
+      const agentLabel = selectedAgent === 'supernova-v1' ? 'SuperNova v1' : 'GPT OSS 20B';
+      await handleSingleAgentExecution(enhancedPrompt, agentLabel);
     }
 
   } catch (error) {
@@ -2496,21 +2610,16 @@ async function handleSendToAgent() {
     setAgentBusy(false);
     if (els.sendAgentPromptBtn) els.sendAgentPromptBtn.disabled = false;
     if (els.sendAgentBtn) els.sendAgentBtn.disabled = false;
-    updateAgentStatus('ready', '✅ Ready');
+    updateAgentStatus('ready', 'Ready');
   }
 }
 
 /**
- * Execute using Valkyrie multi-agent orchestration
- * Planner → Coder → Reviewer → Fast
+ * Execute using SuperNova multi-agent orchestration
+ * Planner → Coder → Reviewer
  */
-async function handleValkyrieExecution(prompt) {
-  console.log("📝 Valkyrie multi-agent mode");
-
-  const orKey = els.openRouterKeyInput?.value.trim() || "";
-  if (!orKey) {
-    addChatMessage("system", "ℹ️ No OpenRouter key detected — Running Valkyrie multi-agent harness using free Pollinations fallback...");
-  }
+async function handleSupernovaExecution(prompt) {
+  console.log("📝 SuperNova multi-agent mode");
 
   const activeTab = getActiveTab();
   const activeFilePath = activeTab ? activeTab.path : null;
@@ -2519,19 +2628,12 @@ async function handleValkyrieExecution(prompt) {
   valkyrieSession.activeFilePath = activeFilePath;
   valkyrieSession.originalContent = activeTab ? activeTab.content : "";
 
-  const apiKeys = {
-    openrouter: els.openRouterKeyInput?.value.trim() || "",
-    groq: els.groqKeyInput?.value.trim() || "",
-    coderModel: state.modelKey
-  };
-
   try {
     // Apply diffs in real-time
-    const results = await window.novaAPI.valkyrie.execute(
+    const results = await window.novaAPI.supernova.execute(
       state.currentConversationId,
       prompt,
-      activeFilePath,
-      apiKeys
+      activeFilePath
     );
 
     if (results && results.length > 0) {
@@ -2539,12 +2641,12 @@ async function handleValkyrieExecution(prompt) {
       showDiffsInEditor(results);
 
       // Show summary
-      const summary = `✅ Valkyrie completed:\n` + 
+      const summary = `✅ SuperNova completed:\n` + 
         results.map(r => `• ${r.task?.description || 'Task'} → \`${r.filePath}\``).join("\n");
       
       addChatMessage("assistant", summary);
 
-      updateActiveValkyrieCard('completed', 'All agents approved the changes!');
+      updateActiveValkyrieCard('completed', 'All checks approved the changes!');
 
       if (state.currentConversationId) {
         try {
@@ -2552,10 +2654,10 @@ async function handleValkyrieExecution(prompt) {
             state.currentConversationId, 
             "assistant", 
             summary, 
-            "Valkyrie"
+            "SuperNova"
           );
         } catch (dbErr) {
-          console.warn('Failed to persist Valkyrie summary to DB (continuing):', dbErr);
+          console.warn('Failed to persist SuperNova summary to DB (continuing):', dbErr);
         }
       }
     }
@@ -2565,30 +2667,23 @@ async function handleValkyrieExecution(prompt) {
   }
 }
 
-async function handleSingleAgentExecution(prompt, agent) {
-  console.log(`🤖 Single agent mode: ${agent}`);
+async function handleSingleAgentExecution(prompt, agentName) {
+  console.log(`🤖 Single agent mode: ${agentName}`);
 
-  updateAgentStatus('active', `💬 ${agent} is responding...`);
+  updateAgentStatus('active', `💬 ${agentName} is responding...`);
 
   try {
-    const apiKeys = {
-      openrouter: els.openRouterKeyInput?.value.trim() || "",
-      groq: els.groqKeyInput?.value.trim() || ""
-    };
-
     // Get active file context
     const activeTab = getActiveTab();
     const activeFilePath = activeTab ? activeTab.path : null;
     const activeFileContent = activeTab ? activeTab.content : "";
 
-    // Call single agent API (Pollinations free by default, OpenRouter if key present)
+    // Call single agent API (Pollinations free by default)
     const response = await window.novaAPI.agent.chat({
-      agent,
       prompt,
       filePath: activeFilePath,
       fileContent: activeFileContent,
-      apiKeys,
-      mode: els.modeSelect?.value || "chat"
+      mode: "chat"
     });
 
     // Show raw response (which contains code fences) in chat, or fallback to text if raw is empty
@@ -2607,29 +2702,14 @@ async function handleSingleAgentExecution(prompt, agent) {
         state.currentConversationId,
         "assistant",
         chatDisplay,
-        agent
+        agentName
       );
     }
   } catch (error) {
-    // If the backend call failed, fallback to a local simulation so the UI remains responsive
+    // If the backend call failed, fallback to simulated response
     console.warn('Single agent execution failed, using simulation fallback:', error);
-    const simulated = await simulateSingleAgentFallback(prompt, agent);
+    const simulated = { text: "Chat fallback: unable to connect to Pollinations API. Please check your network connection.", code: null };
     addChatMessage('assistant', simulated.text);
-    
-    // Store simulated code for Apply
-    if (simulated.code) {
-      state.pendingApplyContent = simulated.code;
-      updateApplyButtonState();
-      addChatMessage("system", "💡 Simulated code ready — click Apply in the chat bubble or use the Apply button at the bottom.");
-    }
-
-    if (state.currentConversationId) {
-      try {
-        await window.novaAPI.chat.addMessage(state.currentConversationId, 'assistant', simulated.text, agent + ' (sim)');
-      } catch (dbErr) {
-        console.warn('Failed to persist simulated assistant message:', dbErr);
-      }
-    }
   }
 }
 
@@ -2689,6 +2769,16 @@ function showDiffsInEditor(results) {
   console.log("📊 Showing diffs in editor");
 
   if (!results || results.length === 0) return;
+
+  // Only show diffs in editor if at least one file has actual changes!
+  const hasActualChanges = results.some(r => {
+    return r.filePath && r.filePath !== 'general-chat' && r.originalContent !== r.proposedContent;
+  });
+
+  if (!hasActualChanges) {
+    console.log("ℹ️ No actual file modifications in results. Skipping diff editor.");
+    return;
+  }
 
   if (!window.diffManager && typeof window.initDiffManager === 'function') {
     window.initDiffManager();
@@ -2961,9 +3051,11 @@ function loadSettings() {
   
   // Default Model
   if (settings.defaultModel) {
-    if (els.defaultModelSelect) els.defaultModelSelect.value = settings.defaultModel;
+    let defaultModel = settings.defaultModel;
+    if (defaultModel === "valkyrie") defaultModel = "supernova-v1";
+    if (els.defaultModelSelect) els.defaultModelSelect.value = defaultModel;
     if (els.modelModeSelect) {
-      els.modelModeSelect.value = settings.defaultModel;
+      els.modelModeSelect.value = defaultModel;
       const event = new Event("change");
       els.modelModeSelect.dispatchEvent(event);
     }
@@ -3003,7 +3095,7 @@ function saveSettings() {
     lineNumbers: els.lineNumbersSelect ? els.lineNumbersSelect.value : "on",
     panelWidth: els.panelWidthSelect.value,
     defaultProvider: els.defaultProviderSelect ? els.defaultProviderSelect.value : "pollinations",
-    defaultModel: els.defaultModelSelect ? els.defaultModelSelect.value : "valkyrie",
+    defaultModel: els.defaultModelSelect ? els.defaultModelSelect.value : "supernova-v1",
     aiTemperature: els.aiTemperatureInput ? els.aiTemperatureInput.value : "0.7",
     terminalFontSize: els.terminalFontSizeSelect ? els.terminalFontSizeSelect.value : "13",
     terminalTheme: els.terminalThemeSelect ? els.terminalThemeSelect.value : "match-ui"
@@ -4459,7 +4551,7 @@ const TOUR_STEPS = [
   },
   {
     selector: '#aiPanel',
-    content: 'The Nova AI Agent Panel provides contextual assistance. Choose between multiple LLMs (Valkyrie, DeepSeek R1, Qwen) to co-author or edit code in real-time.'
+    content: 'The SuperNova AI Panel provides contextual assistance. Use our custom-branded SuperNova v1 multi-agent engine or the GPT OSS 20B model for real-time code execution and chatting.'
   },
   {
     selector: '#terminalPanel',

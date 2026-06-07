@@ -216,8 +216,6 @@
           <div id="xtermTerminalContainer" class="terminal-container"></div>
         </section>
       </div>
-
-      <!-- Resize handle: editor ↔ AI panel -->
       <div class="resize-handle resize-handle-h" id="resizeAiPanel" title="Drag to resize"></div>
 
       <!-- AI Chat Panel (right side) — redesigned -->
@@ -228,7 +226,7 @@
           <div class="ai-header-top">
             <div class="ai-brand">
               <span class="ai-brand-dot"></span>
-              <span class="ai-title">Nova Agent</span>
+              <span class="ai-title">SuperNova AI</span>
             </div>
             <div class="ai-status">
               <span id="agentStatusDot" class="status-dot ready"></span>
@@ -236,85 +234,56 @@
             </div>
           </div>
 
-          <!-- Model selector — clean pill style, no emoji -->
+          <!-- Model toggle pill -->
           <div class="model-selector-row">
-            <select id="modelModeSelect" class="model-pill-select" title="Choose AI agent mode">
-              <option value="valkyrie">Valkyrie · Multi-Agent</option>
-              <option value="deepseek">DeepSeek R1</option>
-              <option value="qwen">Qwen 2.5 Coder</option>
-              <option value="llama">Llama 3.3 70B</option>
-              <option value="gemini">Gemini 2.5 Flash</option>
-              <option value="rapidchat">Rapid Chat (Friend's App)</option>
-            </select>
+            <div class="model-toggle-pill" id="modelTogglePill">
+              <button class="model-toggle-btn active" id="btnSupernova" data-model="supernova-v1">SuperNova v1</button>
+              <button class="model-toggle-btn" id="btnGptOss" data-model="gpt-oss-20b">GPT OSS 20B</button>
+            </div>
           </div>
         </div>
 
-        <!-- Collapsible Settings -->
-        <details class="agent-controls-details">
-          <summary class="agent-controls-summary">
-            <span>Configuration</span>
-            <span class="summary-chevron">›</span>
-          </summary>
-          <div class="agent-controls">
-            <label class="control-label">
-              <span>Provider</span>
-              <select id="providerSelect" class="control-select">
-                <option value="pollinations">Pollinations (Free)</option>
-                <option value="openrouter">OpenRouter</option>
-                <option value="rapidchat">Rapid-Chat (Vercel)</option>
-              </select>
-            </label>
-            <label class="control-label">
-              <span>Model</span>
-              <select id="modelSelect" class="control-select"></select>
-            </label>
-            <label class="control-label">
-              <span>Mode</span>
-              <select id="modeSelect" class="control-select">
-                <option value="chat">Chat</option>
-                <option value="edit">Edit</option>
-                <option value="explain">Explain</option>
-                <option value="debug">Debug</option>
-              </select>
-            </label>
-            <label class="control-label" id="openRouterKeyWrap">
-              <span>OpenRouter Key</span>
-              <input id="openRouterKeyInput" type="password" class="control-input" placeholder="sk-or-..." autocomplete="off" />
-            </label>
-            <label class="control-label hidden" id="groqKeyWrap">
-              <span>Groq Key</span>
-              <input id="groqKeyInput" type="password" class="control-input" placeholder="gsk_..." autocomplete="off" />
-            </label>
-            <p id="modelHint" class="hint-text"></p>
-            <p class="context-label">
-              Context: <code id="contextFileLabel">No file</code>
-            </p>
-          </div>
-        </details>
-
-        <!-- Conversations -->
-        <details class="conversations-section-details">
+        <!-- Conversations History -->
+        <details class="conversations-section-details" id="conversationsSectionDetails">
           <summary class="conversations-header-summary">
-            <span>Conversations</span>
+            <span>Chat History</span>
             <button id="newConversationBtn" class="ghost-btn new-conv-btn">+ New</button>
           </summary>
           <div id="conversationList" class="conversation-list"></div>
         </details>
 
-        <!-- Rapid-Chat Container (iframe) -->
-        <div id="rapidChatContainer" class="rapid-chat-container hidden" style="flex: 1; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 250px; background: #0c0c14; border: none; border-radius: 8px; overflow: hidden; margin-bottom: 8px;">
-          <iframe id="rapidChatIframe" src="about:blank" style="flex: 1; border: none; width: 100%; height: 100%;"></iframe>
+        <!-- AI Welcome Screen -->
+        <div id="aiWelcomeScreen" class="ai-welcome-screen">
+          <div class="welcome-logo-container">
+            <div class="supernova-logo-svg" id="welcomeSupernovaLogo">
+              <img src="../assets/icon.png" alt="SuperNova Logo" style="width: 56px; height: 56px; border-radius: 12px;" />
+            </div>
+          </div>
+          <h2 class="welcome-title">SuperNova</h2>
+          <p class="welcome-tagline">What can I help you build today?</p>
+          
+          <div class="suggestion-chips">
+            <button class="suggestion-chip" data-prompt="Create a simple landing page layout with HTML and CSS.">
+              <span class="chip-text">Create UI Layout</span>
+            </button>
+            <button class="suggestion-chip" data-prompt="Analyze the active file for bugs and logic issues.">
+              <span class="chip-text">Debug Active File</span>
+            </button>
+            <button class="suggestion-chip" data-prompt="Explain how the core logic of this project works.">
+              <span class="chip-text">Explain Project</span>
+            </button>
+          </div>
         </div>
 
         <!-- Chat Messages -->
-        <div id="chatMessages" class="chat-messages"></div>
+        <div id="chatMessages" class="chat-messages hidden"></div>
 
         <!-- Chat Composer -->
         <div class="chat-composer">
           <div class="composer-context-bar" id="composerContextBar">
             <span class="context-file-chip" id="contextChip"></span>
           </div>
-          <textarea id="agentPromptInput" class="chat-textarea" placeholder="Ask Nova to chat, edit, explain, or debug… (⌘Enter to send)"></textarea>
+          <textarea id="agentPromptInput" class="chat-textarea" placeholder="Ask SuperNova to write code, edit, explain, or debug… (⌘Enter)"></textarea>
           <div class="chat-actions">
             <div class="chat-actions-left" style="position: relative;">
               <button id="addContextBtn" class="composer-icon-btn" title="Add selection as context">
@@ -336,9 +305,12 @@
         </div>
 
         <!-- Hidden legacy elements for compatibility -->
+        <select id="modelModeSelect" style="display:none">
+          <option value="supernova-v1">SuperNova v1</option>
+          <option value="gpt-oss-20b">GPT OSS 20B</option>
+        </select>
         <input type="hidden" id="agentInput" />
         <button style="display:none" id="sendAgentBtn"></button>
-        <!-- Hidden badge spans for JS compat -->
         <span class="agent-badge hidden" data-role="planner"></span>
         <span class="agent-badge hidden" data-role="coder"></span>
         <span class="agent-badge hidden" data-role="reviewer"></span>
@@ -474,29 +446,17 @@
           <!-- AI Agent Pane -->
           <div class="settings-pane" id="pane-ai-agent">
             <label class="control-label">
-              <span>Default Provider</span>
-              <select id="defaultProviderSelect" class="control-select">
-                <option value="pollinations">Pollinations (Free)</option>
-                <option value="openrouter">OpenRouter</option>
-              </select>
-            </label>
-            <label class="control-label">
-              <span>Default Model</span>
+              <span>Default AI Model</span>
               <select id="defaultModelSelect" class="control-select">
-                <option value="valkyrie">Valkyrie · Multi-Agent</option>
-                <option value="deepseek">DeepSeek R1</option>
-                <option value="qwen">Qwen 2.5 Coder</option>
-                <option value="llama">Llama 3.3 70B</option>
-                <option value="gemini">Gemini 2.5 Flash</option>
+                <option value="supernova-v1">SuperNova v1 (Multi-Agent)</option>
+                <option value="gpt-oss-20b">GPT OSS 20B (Simple Chat)</option>
               </select>
             </label>
-            <label class="control-label">
-              <span>Temperature</span>
-              <div style="display: flex; align-items: center; gap: 12px; width: 100%;">
-                <input type="range" id="aiTemperatureInput" min="0" max="1" step="0.1" value="0.7" style="flex: 1;" />
-                <span id="aiTemperatureVal" style="color: var(--text); min-width: 24px; text-align: right;">0.7</span>
-              </div>
-            </label>
+            <!-- Hidden inputs to prevent JS exceptions in settings load/save -->
+            <select id="defaultProviderSelect" style="display:none">
+              <option value="pollinations" selected>Pollinations</option>
+            </select>
+            <input type="hidden" id="aiTemperatureInput" value="0.7" />
           </div>
           <!-- Terminal Pane -->
           <div class="settings-pane" id="pane-terminal">

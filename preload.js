@@ -41,26 +41,25 @@ contextBridge.exposeInMainWorld("novaAPI", {
     deleteMessage: (messageId) => ipcRenderer.invoke("chat:delete-message", messageId)
   },
 
-  // Valkyrie Agent Harness API
-  valkyrie: {
-    execute: (conversationId, prompt, activeFilePath, apiKeys) => 
-      ipcRenderer.invoke("valkyrie:execute", conversationId, prompt, activeFilePath, apiKeys),
-    reviewSelection: (text, contextFilePath, apiKeys) => 
-      ipcRenderer.invoke("valkyrie:review-selection", text, contextFilePath, apiKeys),
-    abort: () => ipcRenderer.invoke("valkyrie:abort"),
-    getEnvKeys: () => ipcRenderer.invoke("valkyrie:get-env-keys"),
+  // SuperNova Agent Harness API
+  supernova: {
+    execute: (conversationId, prompt, activeFilePath) => 
+      ipcRenderer.invoke("supernova:execute", conversationId, prompt, activeFilePath),
+    reviewSelection: (text, contextFilePath) => 
+      ipcRenderer.invoke("supernova:review-selection", text, contextFilePath),
+    abort: () => ipcRenderer.invoke("supernova:abort"),
     
     // Global Orchestration Streaming Events
     onEvent: (channel, callback) => {
       const allowedChannels = [
-        "valkyrie:thought-chunk",
-        "valkyrie:plan-update",
-        "valkyrie:task-update",
-        "valkyrie:diff-chunk",
-        "valkyrie:review-status",
-        "valkyrie:status",
-        "valkyrie:completed",
-        "valkyrie:error"
+        "supernova:thought-chunk",
+        "supernova:plan-update",
+        "supernova:task-update",
+        "supernova:diff-chunk",
+        "supernova:review-status",
+        "supernova:status",
+        "supernova:completed",
+        "supernova:error"
       ];
       if (!allowedChannels.includes(channel)) return () => {};
       
