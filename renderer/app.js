@@ -167,6 +167,10 @@ const els = {
   newFolderBtn: document.getElementById("newFolderBtn"),
   tabsBar: document.getElementById("tabsBar"),
   monacoEditorContainer: document.getElementById("monacoEditorContainer"),
+  markdownToggleContainer: document.getElementById("markdownToggleContainer"),
+  markdownCodeBtn: document.getElementById("markdownCodeBtn"),
+  markdownPreviewBtn: document.getElementById("markdownPreviewBtn"),
+  markdownPreviewContainer: document.getElementById("markdownPreviewContainer"),
   statusLanguage: document.getElementById("statusLanguage"),
   statusCursor: document.getElementById("statusCursor"),
   statusEncoding: document.getElementById("statusEncoding"),
@@ -618,6 +622,14 @@ function bindEvents() {
         handleSendToAgent();
       }
     });
+  });
+
+  // Markdown toggle click handlers
+  els.markdownCodeBtn?.addEventListener("click", () => {
+    setMarkdownView("code");
+  });
+  els.markdownPreviewBtn?.addEventListener("click", () => {
+    setMarkdownView("preview");
   });
 
   // ========== NEW: STICKY AGENT PANEL EVENTS ==========
@@ -1657,6 +1669,10 @@ function clearEditor() {
   renderBreadcrumbs();
   renderOutline();
   showWelcomeScreen();
+
+  if (els.markdownToggleContainer) els.markdownToggleContainer.classList.add('hidden');
+  if (els.markdownPreviewContainer) els.markdownPreviewContainer.classList.add('hidden');
+  if (els.monacoEditorContainer) els.monacoEditorContainer.classList.remove('hidden');
 }
 
 /**
@@ -1668,6 +1684,9 @@ function setEditorContent(content, filePath) {
   if (!filePath) {
     state.editor.setValue(content ?? "");
     updateStatusBar();
+    if (els.markdownToggleContainer) els.markdownToggleContainer.classList.add('hidden');
+    if (els.markdownPreviewContainer) els.markdownPreviewContainer.classList.add('hidden');
+    if (els.monacoEditorContainer) els.monacoEditorContainer.classList.remove('hidden');
     return;
   }
 
@@ -1686,6 +1705,58 @@ function setEditorContent(content, filePath) {
 
   state.editor.setModel(model);
   updateStatusBar();
+
+  // Handle Markdown toggle display and view mode
+  if (filePath.endsWith('.md')) {
+    if (els.markdownToggleContainer) els.markdownToggleContainer.classList.remove('hidden');
+    const tab = state.tabs.find((t) => t.path === filePath);
+    const viewMode = tab ? (tab.markdownView || 'code') : 'code';
+    setMarkdownView(viewMode);
+  } else {
+    if (els.markdownToggleContainer) els.markdownToggleContainer.classList.add('hidden');
+    if (els.markdownPreviewContainer) els.markdownPreviewContainer.classList.add('hidden');
+    if (els.monacoEditorContainer) els.monacoEditorContainer.classList.remove('hidden');
+  }
+}
+
+function setMarkdownView(viewMode) {
+  const activeTab = getActiveTab();
+  if (!activeTab || !activeTab.path.endsWith('.md')) return;
+
+  activeTab.markdownView = viewMode;
+
+  if (viewMode === 'preview') {
+    if (els.markdownCodeBtn) els.markdownCodeBtn.classList.remove('active');
+    if (els.markdownPreviewBtn) els.markdownPreviewBtn.classList.add('active');
+
+    if (els.monacoEditorContainer) els.monacoEditorContainer.classList.add('hidden');
+    if (els.markdownPreviewContainer) els.markdownPreviewContainer.classList.remove('hidden');
+
+    // Render markdown
+    let htmlContent = '';
+    try {
+      if (window.marked && typeof window.marked.parse === 'function') {
+        htmlContent = window.marked.parse(activeTab.content || '');
+      } else {
+        htmlContent = `<pre>${activeTab.content || ''}</pre>`;
+      }
+    } catch (err) {
+      htmlContent = `<p style="color:var(--red);">Error parsing markdown: ${err.message}</p><pre>${activeTab.content || ''}</pre>`;
+    }
+    els.markdownPreviewContainer.innerHTML = htmlContent;
+  } else {
+    if (els.markdownCodeBtn) els.markdownCodeBtn.classList.add('active');
+    if (els.markdownPreviewBtn) els.markdownPreviewBtn.classList.remove('active');
+
+    if (els.markdownPreviewContainer) els.markdownPreviewContainer.classList.add('hidden');
+    if (els.monacoEditorContainer) els.monacoEditorContainer.classList.remove('hidden');
+
+    if (state.editor) {
+      setTimeout(() => {
+        state.editor.layout();
+      }, 50);
+    }
+  }
 }
 
 function getActiveTab() {
