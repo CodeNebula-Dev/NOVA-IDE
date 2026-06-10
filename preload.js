@@ -76,6 +76,19 @@ contextBridge.exposeInMainWorld("novaAPI", {
     inlineEdit: (payload) => ipcRenderer.invoke("agent:inline-edit", payload)
   },
 
+  // AI Configuration & Ollama Setup API
+  ai: {
+    getConfig: () => ipcRenderer.invoke("ai:get-config"),
+    setConfig: (config) => ipcRenderer.invoke("ai:set-config", config),
+    checkOllama: () => ipcRenderer.invoke("ai:check-ollama"),
+    pullModel: (modelName) => ipcRenderer.invoke("ai:pull-model", modelName),
+    onPullProgress: (callback) => {
+      const listener = (event, data) => callback(data);
+      ipcRenderer.on("ai:pull-progress", listener);
+      return () => ipcRenderer.removeListener("ai:pull-progress", listener);
+    }
+  },
+
   // Git API
   git: {
     status: () => ipcRenderer.invoke("git:status"),

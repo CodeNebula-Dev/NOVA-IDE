@@ -1,8 +1,11 @@
 /**
- * Coder Agent (Pollinations Free API — qwen-coder model)
- * Generates code changes for each task in the SuperNova v1 pipeline.
- * No API keys required.
+ * Coder Agent — SuperNova v1 Pipeline
+ * 
+ * Generates code changes for each task using the LLM Gateway.
+ * Routes through multiple providers for reliability.
  */
+
+const { callLLMStream, consumeStream } = require('./llm-gateway');
 
 class StreamThinkFilter {
   constructor(onData) {
@@ -222,117 +225,38 @@ MANDATORY RETRY INSTRUCTIONS:
     return false;
   }
 
-  // Streaming API request helper — Pollinations only
+  // Streaming API request helper — routes through LLM Gateway
   const performStreamRequest = async (currentMessages) => {
     let outputText = "";
 
-    const apiURL = "https://text.pollinations.ai/v1/chat/completions";
-    const maxRetries = 5;
-    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+    const filter = new StreamThinkFilter((cleanText) => {
+      outputText += cleanText;
+      onDiffChunk(cleanText);
+    });
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      const controller = new AbortController();
-      const initialTimeout = setTimeout(() => {
-        console.warn("[Coder] Pollinations initial request timed out.");
-        controller.abort();
-      }, 45000);
+    try {
+      const streamObj = await callLLMStream(currentMessages, {
+        purpose: 'code',
+        temperature: 0.2,
+        maxTokens: 8192,
+        timeout: 120000
+      });
 
-      // Choose model dynamically to handle rate limits (429)
-      const modelToUse = attempt === 1 ? "qwen-coder" : (attempt % 2 === 0 ? "openai" : "llama");
-      
-      try {
-        const response = await fetch(apiURL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: currentMessages,
-            model: modelToUse,
-            seed: 42,
-            private: true,
-            stream: true
-          }),
-          signal: controller.signal
-        });
+      await consumeStream(streamObj, (chunk) => {
+        filter.feed(chunk);
+      }, { heartbeatTimeout: 20000 });
 
-        clearTimeout(initialTimeout);
-
-        if (!response.ok) {
-          throw new Error(`Pollinations free API error ${response.status}`);
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        const filter = new StreamThinkFilter((cleanText) => {
-          outputText += cleanText;
-          onDiffChunk(cleanText);
-        });
-
-        let streamBuffer = "";
-        let heartbeatTimer = setTimeout(() => {
-          console.warn("[Coder] Pollinations stream stalled. Aborting.");
-          controller.abort();
-        }, 20000);
-
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            clearTimeout(heartbeatTimer);
-            if (done) break;
-
-            heartbeatTimer = setTimeout(() => {
-              console.warn("[Coder] Pollinations stream stalled. Aborting.");
-              controller.abort();
-            }, 20000);
-
-            streamBuffer += decoder.decode(value, { stream: true });
-
-            let lineIndex;
-            while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
-              const line = streamBuffer.slice(0, lineIndex).trim();
-              streamBuffer = streamBuffer.slice(lineIndex + 1);
-
-              if (line.startsWith("data:")) {
-                const dataStr = line.slice(5).trim();
-                if (dataStr === "[DONE]") continue;
-
-                try {
-                  const parsed = JSON.parse(dataStr);
-                  const text = parsed?.choices?.[0]?.delta?.content || parsed?.choices?.[0]?.delta?.reasoning || "";
-                  if (text) {
-                    filter.feed(text);
-                  }
-                } catch (e) {
-                  // Ignore JSON parse errors
-                }
-              }
-            }
-          }
-        } finally {
-          clearTimeout(heartbeatTimer);
-          try {
-            reader.releaseLock();
-          } catch (e) {}
-        }
-
-        filter.flush();
-        return outputText;
-      } catch (err) {
-        clearTimeout(initialTimeout);
-        if (attempt === maxRetries) {
-          throw err;
-        }
-        const isRateLimitOrServerErr = err.message && (
-          err.message.includes("429") || 
-          err.message.includes("502") || 
-          err.message.includes("503") || 
-          err.message.includes("504")
-        );
-        const retryDelay = isRateLimitOrServerErr ? (attempt * 8000) : (attempt * 3000);
-        console.warn(`[Coder Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying in ${retryDelay / 1000} seconds...]`);
-        onDiffChunk(`\n\n[SuperNova: Connection failed (${err.message}). Retrying in ${retryDelay / 1000}s...]\n\n`);
-        await delay(retryDelay);
-      }
+      filter.flush();
+    } catch (err) {
+      // If streaming fails, try non-streaming as final fallback
+      console.warn(`[Coder] Streaming failed (${err.message}), attempting non-streaming fallback...`);
+      const { callLLM } = require('./llm-gateway');
+      const text = await callLLM(currentMessages, { purpose: 'code', temperature: 0.2, maxTokens: 8192 });
+      filter.feed(text);
+      filter.flush();
     }
+
+    return outputText;
   };
 
   // Main prompt history

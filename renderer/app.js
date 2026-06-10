@@ -278,7 +278,9 @@ async function init() {
     clearEditor();
   }
 
-  // 5. Register Valkyrie events
+  // Initialize local Ollama panel status & setup
+  initOllamaPanel();
+
   // 5. Register SuperNova events
   if (window.novaAPI.supernova) {
     window.novaAPI.supernova.onEvent("supernova:thought-chunk", (data) => {
@@ -298,6 +300,9 @@ async function init() {
     });
     window.novaAPI.supernova.onEvent("supernova:status", (data) => {
       updateActiveValkyrieCard('status', data.message);
+      if (data.model) {
+        updateActiveValkyrieCard('model', data.model);
+      }
     });
     window.novaAPI.supernova.onEvent("supernova:completed", (data) => {
       updateActiveValkyrieCard('completed', data);
@@ -713,6 +718,9 @@ function bindEvents() {
         } else if (panel === 'git') {
           document.getElementById('gitPanel')?.classList.remove('hidden');
           refreshGitPanel();
+        } else if (panel === 'ollama') {
+          document.getElementById('ollamaPanel')?.classList.remove('hidden');
+          checkOllamaStatusInPanel();
         }
         
         if (sidebar && sidebar.classList.contains('collapsed')) {
@@ -2403,9 +2411,17 @@ window.applyToActiveFile = (encodedCode) => {
     showToastNotification("No active file open!");
     return;
   }
-  state.editor.setValue(code);
-  handleEditorInput();
-  showToastNotification(`Applied changes to ${activeTab.name}`);
+  
+  // Set up valkyrieSession for single-file diff review
+  valkyrieSession.modifiedFiles = [{
+    filePath: activeTab.path,
+    originalContent: activeTab.content || state.editor.getValue(),
+    proposedContent: code
+  }];
+  valkyrieSession.activeIndex = 0;
+  
+  renderDiffSidebar();
+  showDiffEditorForIndex(0);
 };
 
 function formatMessageContent(content) {
@@ -2418,7 +2434,7 @@ function formatMessageContent(content) {
     
   const codeBlockRegex = /```(\w*)\r?\n([\s\S]*?)```/g;
   escaped = escaped.replace(codeBlockRegex, (match, lang, code) => {
-    const encoded = encodeURIComponent(code.trim());
+    const encoded = encodeURIComponent(code.trim()).replace(/'/g, "%27");
     const displayLang = lang ? lang.toLowerCase() : "code";
     return `<div class="code-container">
   <div class="code-header">
@@ -2435,7 +2451,7 @@ function formatMessageContent(content) {
   
   const customCodeBlockRegex = /&lt;nova-code&gt;([\s\S]*?)&lt;\/nova-code&gt;/g;
   escaped = escaped.replace(customCodeBlockRegex, (match, code) => {
-    const encoded = encodeURIComponent(code.trim());
+    const encoded = encodeURIComponent(code.trim()).replace(/'/g, "%27");
     return `<div class="code-container">
   <div class="code-header">
     <span class="code-lang">code</span>
@@ -2565,7 +2581,7 @@ function isQueryConversational(prompt) {
   const editKeywords = [
     "create", "write", "make", "add", "change", "edit", "implement", 
     "delete", "remove", "fix", "refactor", "update", "modify", "rewrite", 
-    "patch", "apply"
+    "patch", "apply", "complete", "complet", "finish", "build", "solve", "generate", "code"
   ];
 
   const hasChat = chatKeywords.some(kw => clean.includes(kw));
@@ -2659,10 +2675,10 @@ async function handleSendToAgent() {
 
     if (selectedAgent === 'supernova-v1' && isQueryConversational(prompt)) {
       mode = 'single-agent';
-      console.log("ℹ️ Routing conversational prompt to chat mode");
+      console.log("[Nova] Routing conversational prompt to chat mode");
     }
 
-    console.log(`🚀 Sending prompt with mode: ${mode}`);
+    console.log(`[Nova] Sending prompt with mode: ${mode}`);
 
     if (mode === 'multi-agent') {
       // ========== SUPERNOVA MULTI-AGENT MODE ==========
@@ -2670,13 +2686,14 @@ async function handleSendToAgent() {
     } else {
       // ========== SINGLE AGENT MODE (GPT OSS 20B / SuperNova v1) ==========
       const agentLabel = selectedAgent === 'supernova-v1' ? 'SuperNova v1' : 'GPT OSS 20B';
-      await handleSingleAgentExecution(enhancedPrompt, agentLabel);
+      const isConversational = isQueryConversational(prompt);
+      await handleSingleAgentExecution(enhancedPrompt, agentLabel, isConversational);
     }
 
   } catch (error) {
-    console.error("❌ Execution failed:", error);
-    addChatMessage("system", `❌ Error: ${error.message}`);
-    updateAgentStatus('error', '❌ Error');
+    console.error("[Error] Execution failed:", error);
+    addChatMessage("system", `[Error] Error: ${error.message}`);
+    updateAgentStatus('error', 'Error');
   } finally {
     setAgentBusy(false);
     if (els.sendAgentPromptBtn) els.sendAgentPromptBtn.disabled = false;
@@ -2690,21 +2707,33 @@ async function handleSendToAgent() {
  * Planner → Coder → Reviewer
  */
 async function handleSupernovaExecution(prompt) {
-  console.log("📝 SuperNova multi-agent mode");
+  console.log("[Nova] SuperNova multi-agent mode");
 
   const activeTab = getActiveTab();
   const activeFilePath = activeTab ? activeTab.path : null;
+  const activeFileContent = activeTab ? (state.editor ? state.editor.getValue() : activeTab.content) : "";
+
+  // Compile open files map
+  const openFiles = {};
+  state.tabs.forEach(tab => {
+    if (tab.path === state.activePath && state.editor) {
+      tab.content = state.editor.getValue();
+    }
+    openFiles[tab.path] = tab.content || "";
+  });
 
   createValkyrieCard(prompt);
   valkyrieSession.activeFilePath = activeFilePath;
-  valkyrieSession.originalContent = activeTab ? activeTab.content : "";
+  valkyrieSession.originalContent = activeFileContent;
 
   try {
     // Apply diffs in real-time
     const results = await window.novaAPI.supernova.execute(
       state.currentConversationId,
       prompt,
-      activeFilePath
+      activeFilePath,
+      activeFileContent,
+      openFiles
     );
 
     if (results && results.length > 0) {
@@ -2712,7 +2741,7 @@ async function handleSupernovaExecution(prompt) {
       showDiffsInEditor(results);
 
       // Show summary
-      const summary = `✅ SuperNova completed:\n` + 
+      const summary = `[Nova] SuperNova completed:\n` + 
         results.map(r => `• ${r.task?.description || 'Task'} → \`${r.filePath}\``).join("\n");
       
       addChatMessage("assistant", summary);
@@ -2738,16 +2767,16 @@ async function handleSupernovaExecution(prompt) {
   }
 }
 
-async function handleSingleAgentExecution(prompt, agentName) {
-  console.log(`🤖 Single agent mode: ${agentName}`);
+async function handleSingleAgentExecution(prompt, agentName, isConversational = false) {
+  console.log(`[Nova] Single agent mode: ${agentName} (Conversational: ${isConversational})`);
 
-  updateAgentStatus('active', `💬 ${agentName} is responding...`);
+  updateAgentStatus('active', `${agentName} is responding...`);
 
   try {
-    // Get active file context
+    // Get active file context (only if the query is not purely conversational)
     const activeTab = getActiveTab();
-    const activeFilePath = activeTab ? activeTab.path : null;
-    const activeFileContent = activeTab ? activeTab.content : "";
+    const activeFilePath = (!isConversational && activeTab) ? activeTab.path : null;
+    const activeFileContent = (!isConversational && activeTab) ? activeTab.content : "";
 
     // Call single agent API (Pollinations free by default)
     const response = await window.novaAPI.agent.chat({
@@ -2989,12 +3018,16 @@ function applySuggestedContentToFile() {
     return;
   }
 
-  activeTab.content = state.pendingApplyContent;
-  activeTab.dirty = true;
-  setEditorContent(activeTab.content, activeTab.path);
-  scheduleSave(activeTab.path, activeTab.content);
-  renderTabs();
-  addChatMessage("system", `Applied AI output to ${activeTab.path}`);
+  // Set up valkyrieSession for single-file diff review
+  valkyrieSession.modifiedFiles = [{
+    filePath: activeTab.path,
+    originalContent: activeTab.content || state.editor.getValue(),
+    proposedContent: state.pendingApplyContent
+  }];
+  valkyrieSession.activeIndex = 0;
+  
+  renderDiffSidebar();
+  showDiffEditorForIndex(0);
 }
 
 function findNodeByPath(targetPath) {
@@ -3047,6 +3080,29 @@ function findFirstFilePath(node) {
 function loadSettings() {
   const settings = JSON.parse(localStorage.getItem("novaSettings") || "{}");
   
+  // Load AI configuration from main process
+  if (window.novaAPI.ai) {
+    window.novaAPI.ai.getConfig().then(config => {
+      if (els.defaultProviderSelect) els.defaultProviderSelect.value = config.preferredProvider || "auto";
+      const groqKeyInput = document.getElementById("groqApiKeyInput");
+      if (groqKeyInput) groqKeyInput.value = config.groqApiKey || "";
+      const endpointInput = document.getElementById("ollamaEndpointInput");
+      if (endpointInput) endpointInput.value = config.ollamaEndpoint || "http://localhost:11434";
+      
+      // Load Ollama Model options dynamically
+      populateOllamaModelDropdown(config.ollamaModel);
+
+      // sync provider UI
+      if (els.providerSelect) {
+        els.providerSelect.value = config.preferredProvider || "auto";
+        const event = new Event("change");
+        els.providerSelect.dispatchEvent(event);
+      }
+    }).catch(err => {
+      console.error("Failed to load AI config from main process:", err);
+    });
+  }
+
   // UI Theme
   if (settings.uiTheme) {
     if (els.uiThemeSelect) els.uiThemeSelect.value = settings.uiTheme;
@@ -3200,6 +3256,20 @@ function saveSettings() {
     els.modelModeSelect.dispatchEvent(event);
   }
   
+  if (window.novaAPI.ai) {
+    const aiConfig = {
+      preferredProvider: els.defaultProviderSelect ? els.defaultProviderSelect.value : "auto",
+      groqApiKey: document.getElementById("groqApiKeyInput") ? document.getElementById("groqApiKeyInput").value.trim() : "",
+      ollamaEndpoint: document.getElementById("ollamaEndpointInput") ? document.getElementById("ollamaEndpointInput").value.trim() : "http://localhost:11434",
+      ollamaModel: document.getElementById("ollamaModelSelect") ? document.getElementById("ollamaModelSelect").value : ""
+    };
+    window.novaAPI.ai.setConfig(aiConfig).then(() => {
+      checkOllamaStatusInPanel();
+    }).catch(err => {
+      console.error("Failed to save AI config:", err);
+    });
+  }
+
   els.settingsModal.classList.add("hidden");
   addChatMessage("system", "Settings saved successfully.");
   
@@ -3411,7 +3481,7 @@ function createValkyrieCard(userPrompt) {
     </div>
     <div class="valkyrie-thought-section">
       <div class="thought-header-row" style="display: flex; justify-content: space-between; align-items: center; user-select: none;">
-        <div class="thought-title" style="flex: 1; padding: 8px 12px; font-size: var(--font-size-sm); font-weight: 500; color: var(--text-secondary); background: var(--bg-base); cursor: pointer; display: flex; align-items: center; gap: 6px; transition: background var(--transition-fast);">▼ Thought Logs (DeepSeek R1)</div>
+        <div class="thought-title" data-model="SuperNova" style="flex: 1; padding: 8px 12px; font-size: var(--font-size-sm); font-weight: 500; color: var(--text-secondary); background: var(--bg-base); cursor: pointer; display: flex; align-items: center; gap: 6px; transition: background var(--transition-fast);">▼ Thought Logs (SuperNova)</div>
         <div class="thought-controls" style="display: flex; gap: 8px; font-size: 0.72rem; align-items: center; background: var(--bg-base); padding: 8px 12px 8px 0;">
           <button class="thought-expand-btn" style="display: block; background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 6px; font-family: var(--font-ui); font-size: 0.72rem; border-radius: var(--radius-sm); border: 1px solid var(--border);">↕ Expand</button>
         </div>
@@ -3455,7 +3525,8 @@ function createValkyrieCard(userPrompt) {
   
   const toggleThoughtCollapse = () => {
     const isClosed = thoughtSection.classList.toggle("closed");
-    thoughtTitle.textContent = isClosed ? "▶ Thought Logs (DeepSeek R1)" : "▼ Thought Logs (DeepSeek R1)";
+    const model = thoughtTitle.dataset.model || 'SuperNova';
+    thoughtTitle.textContent = isClosed ? `▶ Thought Logs (${model})` : `▼ Thought Logs (${model})`;
     if (thoughtExpandBtn) {
       thoughtExpandBtn.style.display = isClosed ? "none" : "block";
     }
@@ -3565,7 +3636,8 @@ function updateActiveValkyrieCard(type, data) {
     const isFirstThoughtChunk = valkyrieThoughtBuffer === "";
     if (thoughtSection.classList.contains("closed") && isFirstThoughtChunk) {
       thoughtSection.classList.remove("closed");
-      activeValkyrieCard.querySelector(".thought-title").textContent = "▼ Thought Logs (DeepSeek R1)";
+      const model = activeValkyrieCard.querySelector(".thought-title").dataset.model || 'SuperNova';
+      activeValkyrieCard.querySelector(".thought-title").textContent = `▼ Thought Logs (${model})`;
       const thoughtExpandBtn = activeValkyrieCard.querySelector(".thought-expand-btn");
       if (thoughtExpandBtn) {
         thoughtExpandBtn.style.display = "block";
@@ -3688,7 +3760,8 @@ function updateActiveValkyrieCard(type, data) {
     
     // Close the thought logs to save vertical space
     activeValkyrieCard.querySelector(".valkyrie-thought-section").classList.add("closed");
-    activeValkyrieCard.querySelector(".thought-title").textContent = "▶ Thought Logs (DeepSeek R1)";
+    const model = activeValkyrieCard.querySelector(".thought-title").dataset.model || 'SuperNova';
+    activeValkyrieCard.querySelector(".thought-title").textContent = `▶ Thought Logs (${model})`;
     const thoughtExpandBtn = activeValkyrieCard.querySelector(".thought-expand-btn");
     if (thoughtExpandBtn) {
       thoughtExpandBtn.style.display = "none";
@@ -3714,6 +3787,15 @@ function updateActiveValkyrieCard(type, data) {
     if (valkyrieSession.modifiedFiles.length > 0) {
       renderDiffSidebar();
       showDiffEditorForIndex(0);
+    }
+  }
+  
+  else if (type === 'model') {
+    const thoughtTitle = activeValkyrieCard.querySelector(".thought-title");
+    if (thoughtTitle) {
+      const isClosed = activeValkyrieCard.querySelector(".valkyrie-thought-section").classList.contains("closed");
+      thoughtTitle.dataset.model = data;
+      thoughtTitle.textContent = (isClosed ? "▶" : "▼") + ` Thought Logs (${data})`;
     }
   }
   
@@ -5232,6 +5314,190 @@ async function showGitBranchQuickPick(event) {
   setTimeout(() => {
     document.addEventListener('click', closeHandler);
   }, 10);
+}
+
+/* ==========================================================================
+   Ollama Setup Panel Helper Functions
+   ========================================================================== */
+
+let ollamaCheckInterval = null;
+
+function initOllamaPanel() {
+  const verifyBtn = document.getElementById("ollamaVerifyBtn");
+  const pullModelBtn = document.getElementById("ollamaDownloadBtn");
+  
+  if (verifyBtn) {
+    verifyBtn.addEventListener("click", () => {
+      checkOllamaStatusInPanel(true);
+    });
+  }
+  
+  if (pullModelBtn) {
+    pullModelBtn.addEventListener("click", () => {
+      const selectEl = document.getElementById("ollamaDownloadSelect");
+      if (!selectEl) return;
+      const modelName = selectEl.value;
+      startOllamaModelPull(modelName);
+    });
+  }
+  
+  // Register pull progress listener
+  if (window.novaAPI.ai && window.novaAPI.ai.onPullProgress) {
+    window.novaAPI.ai.onPullProgress((data) => {
+      handlePullProgress(data);
+    });
+  }
+  
+  // Run initial check
+  checkOllamaStatusInPanel();
+  
+  // Poll every 15 seconds while panel is visible
+  setInterval(() => {
+    const panel = document.getElementById("ollamaPanel");
+    if (panel && !panel.classList.contains("hidden")) {
+      checkOllamaStatusInPanel();
+    }
+  }, 15000);
+}
+
+async function checkOllamaStatusInPanel(showToast = false) {
+  const badge = document.getElementById("ollamaStatusBadge");
+  const desc = document.getElementById("ollamaStatusDescription");
+  const list = document.getElementById("ollamaModelsList");
+  
+  if (!badge) return;
+  
+  try {
+    const result = await window.novaAPI.ai.checkOllama();
+    if (result.available) {
+      badge.textContent = "Running";
+      badge.className = "ollama-badge online";
+      desc.textContent = `Connected successfully to local Ollama at ${result.endpoint || 'http://localhost:11434'}.`;
+      
+      // Render models list
+      if (result.models && result.models.length > 0) {
+        list.innerHTML = result.models.map(m => {
+          const sizeGB = (m.size / (1024 * 1024 * 1024)).toFixed(2);
+          return `
+            <div class="ollama-model-item">
+              <span class="ollama-model-name">${m.name}</span>
+              <span class="ollama-model-size">${sizeGB} GB</span>
+            </div>
+          `;
+        }).join("");
+      } else {
+        list.innerHTML = `<div class="ollama-empty-state">No models pulled yet. Use the downloader above to pull a model!</div>`;
+      }
+      
+      if (showToast) {
+        showToastNotification("Ollama connection verified!");
+      }
+    } else {
+      badge.textContent = "Offline";
+      badge.className = "ollama-badge offline";
+      desc.textContent = `Could not connect to Ollama at ${result.endpoint || 'http://localhost:11434'}. Ensure Ollama app is running locally.`;
+      list.innerHTML = `<div class="ollama-empty-state">Ollama service is offline.</div>`;
+      
+      if (showToast) {
+        showToastNotification("Could not connect to Ollama. Is it running?");
+      }
+    }
+  } catch (err) {
+    console.error("Failed to check Ollama status:", err);
+    badge.textContent = "Offline";
+    badge.className = "ollama-badge offline";
+    list.innerHTML = `<div class="ollama-empty-state">Check failed: ${err.message}</div>`;
+  }
+}
+
+async function startOllamaModelPull(modelName) {
+  const container = document.getElementById("ollamaPullProgressContainer");
+  const statusText = document.getElementById("ollamaPullStatusText");
+  const percentText = document.getElementById("ollamaPullPercentage");
+  const bar = document.getElementById("ollamaPullProgressBar");
+  const pullBtn = document.getElementById("ollamaDownloadBtn");
+  
+  if (!container || !pullBtn) return;
+  
+  container.classList.remove("hidden");
+  pullBtn.disabled = true;
+  pullBtn.textContent = "Pulling...";
+  
+  statusText.textContent = `Initiating pull for ${modelName}...`;
+  percentText.textContent = "0%";
+  bar.style.width = "0%";
+  
+  try {
+    const res = await window.novaAPI.ai.pullModel(modelName);
+    if (res.success) {
+      statusText.textContent = `Model ${modelName} pulled successfully!`;
+      percentText.textContent = "100%";
+      bar.style.width = "100%";
+      showToastNotification(`Successfully pulled ${modelName}`);
+      // Refresh models
+      checkOllamaStatusInPanel();
+    } else {
+      statusText.textContent = `Failed: ${res.error || 'Unknown error'}`;
+      showToastNotification(`Pull failed: ${res.error}`);
+    }
+  } catch (err) {
+    statusText.textContent = `Error: ${err.message}`;
+    showToastNotification(`Error pulling model: ${err.message}`);
+  } finally {
+    pullBtn.disabled = false;
+    pullBtn.textContent = "Pull Model";
+    setTimeout(() => {
+      container.classList.add("hidden");
+    }, 5000);
+  }
+}
+
+function handlePullProgress(data) {
+  const statusText = document.getElementById("ollamaPullStatusText");
+  const percentText = document.getElementById("ollamaPullPercentage");
+  const bar = document.getElementById("ollamaPullProgressBar");
+  
+  if (!statusText || !percentText || !bar) return;
+  
+  if (data.status) {
+    statusText.textContent = data.status;
+  }
+  
+  if (data.completed && data.total) {
+    const percent = Math.round((data.completed / data.total) * 100);
+    percentText.textContent = `${percent}%`;
+    bar.style.width = `${percent}%`;
+  }
+}
+
+async function populateOllamaModelDropdown(selectedModel) {
+  const dropdown = document.getElementById("ollamaModelSelect");
+  if (!dropdown) return;
+  
+  dropdown.innerHTML = '<option value="">Auto-Detect (Use default or first available)</option>';
+  
+  try {
+    const result = await window.novaAPI.ai.checkOllama();
+    if (result.available && result.models && result.models.length > 0) {
+      result.models.forEach(m => {
+        const option = document.createElement("option");
+        option.value = m.name;
+        option.textContent = m.name;
+        if (m.name === selectedModel) {
+          option.selected = true;
+        }
+        dropdown.appendChild(option);
+      });
+    } else if (selectedModel) {
+      const option = document.createElement("option");
+      option.value = selectedModel;
+      option.textContent = selectedModel;
+      option.selected = true;
+      dropdown.appendChild(option);
+    }
+  } catch (err) {
+    console.error("Failed to populate Ollama model dropdown:", err);
+  }
 }
 
 

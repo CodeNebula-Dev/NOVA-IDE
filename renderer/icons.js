@@ -42,6 +42,16 @@ const NOVA_ICONS = {
     <line x1="6" y1="9" x2="6" y2="15"/>
   </svg>`,
 
+  ollama: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    <path d="M7 3v4M17 3v4" />
+    <circle cx="10" cy="11" r="1.5" />
+    <circle cx="14" cy="11" r="1.5" />
+    <path d="M9 15a3 3 0 0 0 6 0" />
+    <path d="M11 15h2" />
+    <path d="M12 18v3" />
+  </svg>`,
+
   gitBranch: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
     <line x1="6" y1="3" x2="6" y2="15"/>
     <circle cx="18" cy="6" r="3"/>
@@ -202,6 +212,7 @@ document.addEventListener('DOMContentLoaded', () => {
     iconAI:       'ai',
     iconTerminal: 'terminal',
     iconSettings: 'settings',
+    iconOllama:   'ollama',
     iconNewFile:  'newFile',
     iconNewFolder: 'newFolder',
     iconGitRefresh: 'refresh',

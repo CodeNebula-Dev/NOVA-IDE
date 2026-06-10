@@ -43,18 +43,44 @@ class SuperNovaEngine {
   /**
    * Main execution pipeline: Plan → Code → Review → Apply
    */
-  async run(conversationId, userPrompt, activeFilePath) {
+  async run(conversationId, userPrompt, activeFilePath, activeFileContentInput = "", openFiles = {}) {
     this.aborted = false;
-    this.emit('supernova:status', { status: 'planning', message: 'SuperNova is analyzing your request...' });
+
+    // Determine active planning model name for thought logs title
+    let plannerModel = "SuperNova";
+    try {
+      const { getProviderConfig, checkOllama, getOllamaModelForPurpose } = require('./llm-gateway');
+      await checkOllama().catch(() => {});
+      const config = getProviderConfig();
+      if (config.preferredProvider === 'ollama' || (config.preferredProvider === 'auto' && config.ollamaAvailable)) {
+        plannerModel = getOllamaModelForPurpose('plan') || 'Ollama';
+      } else if (config.preferredProvider === 'groq') {
+        plannerModel = config.models.plan?.groq || 'Llama 3.1';
+      } else {
+        plannerModel = config.models.plan?.pollinations || 'OpenAI';
+      }
+    } catch (e) {
+      console.warn("Could not determine planner model:", e);
+    }
+
+    this.emit('supernova:status', { 
+      status: 'planning', 
+      message: 'SuperNova is analyzing your request...',
+      model: plannerModel
+    });
 
     // 1. Gather all file contexts
-    let activeFileContent = "";
-    if (activeFilePath) {
-      try {
-        const absolutePath = path.resolve(this.workspaceRoot, activeFilePath);
-        activeFileContent = await fs.readFile(absolutePath, 'utf8');
-      } catch (err) {
-        console.error("Could not read active file:", err);
+    let activeFileContent = activeFileContentInput;
+    if (activeFilePath && !activeFileContent) {
+      if (openFiles && openFiles[activeFilePath] !== undefined) {
+        activeFileContent = openFiles[activeFilePath];
+      } else {
+        try {
+          const absolutePath = path.resolve(this.workspaceRoot, activeFilePath);
+          activeFileContent = await fs.readFile(absolutePath, 'utf8');
+        } catch (err) {
+          console.error("Could not read active file:", err);
+        }
       }
     }
 
@@ -109,7 +135,16 @@ class SuperNovaEngine {
       for (const file of filesToRead) {
         try {
           const isTargetActive = activeFilePath && (file.relativePath === activeFilePath || path.resolve(this.workspaceRoot, file.relativePath) === path.resolve(this.workspaceRoot, activeFilePath));
-          const content = isTargetActive ? activeFileContent : await fs.readFile(file.absolutePath, 'utf8');
+          let content = "";
+
+          if (isTargetActive) {
+            content = activeFileContent;
+          } else if (openFiles && (openFiles[file.relativePath] !== undefined || openFiles[file.absolutePath] !== undefined)) {
+            content = openFiles[file.relativePath] !== undefined ? openFiles[file.relativePath] : openFiles[file.absolutePath];
+          } else {
+            content = await fs.readFile(file.absolutePath, 'utf8');
+          }
+
           workspaceFiles.push({
             relativePath: file.relativePath,
             content
@@ -173,7 +208,8 @@ class SuperNovaEngine {
         }
       );
     } catch (err) {
-      this.emit('supernova:error', { message: `Planning failed: ${err.message}` });
+      const msg = `Planning failed: ${err.message}. To resolve rate limits, please configure a local model via the Ollama setup panel on the left sidebar, or add a free Groq API key in Settings -> AI Agent.`;
+      this.emit('supernova:error', { message: msg });
       return null;
     }
 
@@ -197,6 +233,8 @@ class SuperNovaEngine {
       let taskFileContent = "";
       const priorFeedback = [];
 
+      // Resolve target file name to match relative workspace path
+      task.assignedFile = this.resolveFile(task.assignedFile, workspaceFiles);
       const targetFileAbsPath = path.resolve(this.workspaceRoot, task.assignedFile);
       
       // Load current target file contents
@@ -236,7 +274,8 @@ class SuperNovaEngine {
             bestDiff = proposedDiff;
           }
         } catch (err) {
-          this.emit('supernova:error', { message: `Coder failed at task "${task.description}": ${err.message}` });
+          const msg = `Coder failed at task "${task.description}": ${err.message}. To resolve rate limits, please configure a local model via the Ollama setup panel on the left sidebar, or add a free Groq API key in Settings -> AI Agent.`;
+          this.emit('supernova:error', { message: msg });
           return null;
         }
 
@@ -500,6 +539,21 @@ class SuperNovaEngine {
     return files;
   }
 
+  resolveFile(assignedFile, workspaceFiles) {
+    if (!assignedFile) return "unknown";
+    
+    // 1. Check exact match
+    const exactMatch = workspaceFiles.find(f => f.relativePath === assignedFile);
+    if (exactMatch) return exactMatch.relativePath;
+    
+    // 2. Check suffix/basename match (e.g. task assigned "bachi_daemon.py" to "subdir/bachi_daemon.py")
+    const baseName = path.basename(assignedFile).toLowerCase();
+    const basenameMatch = workspaceFiles.find(f => path.basename(f.relativePath).toLowerCase() === baseName);
+    if (basenameMatch) return basenameMatch.relativePath;
+    
+    return assignedFile;
+  }
+
   async buildTreeTextSummary() {
     const IGNORED_DIRS = new Set([
       '.git', 'node_modules', '.nova', '.venv', 'venv', 'env', '.env', 
@@ -510,7 +564,7 @@ class SuperNovaEngine {
 
     try {
       const getTree = async (dir, depth = 0) => {
-        if (depth > 2) return "";
+        if (depth > 4) return "";
         const entries = await fs.readdir(dir, { withFileTypes: true });
         let text = "";
         for (const entry of entries) {

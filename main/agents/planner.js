@@ -1,10 +1,12 @@
 /**
- * Planner Agent (Pollinations Free API)
+ * Planner Agent — SuperNova v1 Pipeline
+ * 
  * Generates an implementation checklist based on user prompt and active file contexts.
- * Part of the SuperNova v1 engine — no API keys required.
+ * Routes through the LLM Gateway for provider-agnostic operation.
  */
 
 const { StreamParser, parsePartialJSONArray } = require('./parser');
+const { callLLMStream, consumeStream } = require('./llm-gateway');
 
 async function runPlanner(userPrompt, contextData, onThought, onPlanReady) {
   const systemPrompt = `You are the Lead Architect Agent inside NOVA IDE, powered by SuperNova v1.
@@ -50,135 +52,55 @@ ${contextData.activeFileContent || ""}
 User Request:
 ${userPrompt}`;
 
-  // Use Pollinations free API — no API key needed
-  const apiURL = "https://text.pollinations.ai/v1/chat/completions";
-  
   onThought("SuperNova v1 is planning your implementation...\nThinking...");
   
-  const maxRetries = 5;
-  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-  let response;
   let jsonBuffer = "";
   let finalPlan = null;
   
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const controller = new AbortController();
-    const initialTimeout = setTimeout(() => {
-      console.warn("[Planner] Pollinations initial request timed out.");
-      controller.abort();
-    }, 45000);
-    
-    // Choose model dynamically to handle rate limits (429)
-    const modelToUse = attempt === 1 ? "openai" : (attempt % 2 === 0 ? "llama" : "mistral");
-    const body = JSON.stringify({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent }
-      ],
-      model: modelToUse,
-      seed: 42,
-      private: true,
-      stream: true
+  const messages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userContent }
+  ];
+
+  try {
+    const streamParser = new StreamParser(
+      (thoughtChunk) => {
+        onThought(thoughtChunk);
+      },
+      (contentChunk) => {
+        jsonBuffer += contentChunk;
+        const partialPlan = parsePartialJSONArray(jsonBuffer);
+        if (partialPlan && partialPlan.length > 0) {
+          onPlanReady(partialPlan, false);
+        }
+      }
+    );
+
+    const streamObj = await callLLMStream(messages, {
+      purpose: 'plan',
+      temperature: 0.2,
+      maxTokens: 4096,
+      timeout: 45000
     });
+
+    await consumeStream(streamObj, (chunk) => {
+      streamParser.feed(chunk);
+    }, { heartbeatTimeout: 20000 });
+
+    streamParser.flush();
     
+    // Final plan extraction
+    finalPlan = parsePartialJSONArray(jsonBuffer);
+  } catch (err) {
+    // If streaming fails completely, try non-streaming via gateway
+    console.warn(`[Planner] Streaming failed (${err.message}), attempting non-streaming fallback...`);
     try {
-      response = await fetch(apiURL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
-        signal: controller.signal
-      });
-      
-      clearTimeout(initialTimeout);
-      
-      if (!response.ok) {
-        throw new Error(`Pollinations free API error ${response.status}`);
-      }
-      
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let streamBuffer = "";
-      
-      const streamParser = new StreamParser(
-        (thoughtChunk) => {
-          onThought(thoughtChunk);
-        },
-        (contentChunk) => {
-          jsonBuffer += contentChunk;
-          const partialPlan = parsePartialJSONArray(jsonBuffer);
-          if (partialPlan && partialPlan.length > 0) {
-            onPlanReady(partialPlan, false);
-          }
-        }
-      );
-      
-      let heartbeatTimer = setTimeout(() => {
-        console.warn("[Planner] Pollinations stream stalled. Aborting.");
-        controller.abort();
-      }, 20000);
-      
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          clearTimeout(heartbeatTimer);
-          if (done) break;
-          
-          heartbeatTimer = setTimeout(() => {
-            console.warn("[Planner] Pollinations stream stalled. Aborting.");
-            controller.abort();
-          }, 20000);
-          
-          streamBuffer += decoder.decode(value, { stream: true });
-          
-          let lineIndex;
-          while ((lineIndex = streamBuffer.indexOf("\n")) !== -1) {
-            const line = streamBuffer.slice(0, lineIndex).trim();
-            streamBuffer = streamBuffer.slice(lineIndex + 1);
-            
-            if (line.startsWith("data:")) {
-              const dataStr = line.slice(5).trim();
-              if (dataStr === "[DONE]") continue;
-              
-              try {
-                const parsed = JSON.parse(dataStr);
-                const text = parsed?.choices?.[0]?.delta?.content || parsed?.choices?.[0]?.delta?.reasoning || "";
-                if (text) {
-                  streamParser.feed(text);
-                }
-              } catch (e) {
-                // Ignore JSON parse errors
-              }
-            }
-          }
-        }
-      } finally {
-        clearTimeout(heartbeatTimer);
-        try {
-          reader.releaseLock();
-        } catch (e) {}
-      }
-      
-      streamParser.flush();
-      
-      // Final plan extraction
-      finalPlan = parsePartialJSONArray(jsonBuffer);
-      break; // Success
-    } catch (err) {
-      clearTimeout(initialTimeout);
-      if (attempt === maxRetries) {
-        throw err;
-      }
-      const isRateLimitOrServerErr = err.message && (
-        err.message.includes("429") || 
-        err.message.includes("502") || 
-        err.message.includes("503") || 
-        err.message.includes("504") ||
-        err.message.includes("timeout") ||
-        err.message.includes("aborted")
-      );
-      const retryDelay = isRateLimitOrServerErr ? (attempt * 8000) : (attempt * 3000);
-      onThought(`\n[Planner Warning: Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying in ${retryDelay / 1000}s...]`);
-      await delay(retryDelay);
+      const { callLLM } = require('./llm-gateway');
+      const rawText = await callLLM(messages, { purpose: 'plan', temperature: 0.2, maxTokens: 4096 });
+      onThought(rawText);
+      finalPlan = parsePartialJSONArray(rawText);
+    } catch (fallbackErr) {
+      throw new Error(`Planning failed: ${fallbackErr.message}`);
     }
   }
   

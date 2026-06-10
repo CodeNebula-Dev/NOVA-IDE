@@ -7,6 +7,7 @@ const os = require("os");
 const crypto = require("crypto");
 const Database = require("better-sqlite3");
 const { SuperNovaEngine } = require("./main/agents/supernova");
+const llmGateway = require("./main/agents/llm-gateway");
 const { exec } = require("child_process");
 const util = require("util");
 const execPromise = util.promisify(exec);
@@ -373,13 +374,13 @@ ipcMain.handle("chat:delete-message", (event, messageId) => {
 });
 
 
-ipcMain.handle("supernova:execute", async (event, conversationId, prompt, activeFilePath) => {
+ipcMain.handle("supernova:execute", async (event, conversationId, prompt, activeFilePath, activeFileContent, openFiles) => {
   if (activeSupernova) {
     activeSupernova.abort();
   }
   activeSupernova = new SuperNovaEngine(mainWindow, db, workspaceRoot);
   try {
-    const results = await activeSupernova.run(conversationId, prompt, activeFilePath);
+    const results = await activeSupernova.run(conversationId, prompt, activeFilePath, activeFileContent, openFiles);
     return results;
   } finally {
     activeSupernova = null;
@@ -407,10 +408,8 @@ ipcMain.handle("supernova:review-selection", async (event, text, activeFilePath)
 
 
 // ── Single-agent chat (Chat / Edit / Explain / Debug) ──────────────────────
-// Exclusively uses Pollinations (completely free, no API key).
+// Exclusively uses LLM Gateway (automatically detects Ollama / Groq / Pollinations).
 ipcMain.handle("agent:chat", async (event, { prompt, filePath, fileContent, mode }) => {
-  const https = require("https");
-
   // Check if query can be handled locally (offline)
   const cleanPrompt = prompt.toLowerCase().trim().replace(/[?.,!]/g, "");
   const helpTriggers = [
@@ -485,61 +484,23 @@ No API keys are required. What should we build today?`,
     return false;
   }
 
-  // --- Call Pollinations Helper with Retry and Model Rotation ---
-  const callPollinationsWithRetry = async (currentMessages, defaultModel = "openai", maxRetries = 5) => {
-    const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-    
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      let modelToUse = defaultModel;
-      if (attempt > 1) {
-        if (defaultModel === "qwen-coder") {
-          modelToUse = attempt % 2 === 0 ? "openai" : "llama";
-        } else {
-          modelToUse = attempt % 2 === 0 ? "llama" : "mistral";
-        }
-      }
-      
-      const body = JSON.stringify({ messages: currentMessages, model: modelToUse, seed: 42, private: true });
-      try {
-        const polResponse = await fetch("https://text.pollinations.ai/v1/chat/completions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-          signal: AbortSignal.timeout(30000)
-        });
-        
-        if (!polResponse.ok) {
-          throw new Error(`Pollinations error ${polResponse.status}`);
-        }
-        
-        const resText = await polResponse.text();
-        try {
-          const data = JSON.parse(resText);
-          return data?.choices?.[0]?.message?.content || resText;
-        } catch (e) {
-          return resText;
-        }
-      } catch (err) {
-        if (attempt === maxRetries) throw err;
-        const isRateLimitOrServerErr = err.message && (
-          err.message.includes("429") || 
-          err.message.includes("502") || 
-          err.message.includes("503") || 
-          err.message.includes("504")
-        );
-        const retryDelay = isRateLimitOrServerErr ? (attempt * 6000) : (attempt * 3000);
-        console.warn(`[Agent API Attempt ${attempt}/${maxRetries} failed: ${err.message}. Retrying with model ${modelToUse} in ${retryDelay / 1000}s...]`);
-        await delay(retryDelay);
-      }
-    }
-  };
-
   let rawText = "";
   let continuationCount = 0;
   const maxContinuations = 3;
 
   while (true) {
-    const currentChunkText = await callPollinationsWithRetry(messages, "openai");
+    let currentChunkText = "";
+    try {
+      currentChunkText = await llmGateway.callLLM(messages, {
+        purpose: 'chat',
+        temperature: 0.7,
+        maxTokens: 4096
+      });
+    } catch (err) {
+      console.error("[Agent Chat] LLM call failed:", err);
+      break;
+    }
+    
     rawText += currentChunkText;
 
     if (checkSingleAgentTruncation(rawText) && continuationCount < maxContinuations) {
@@ -592,12 +553,51 @@ ipcMain.handle("agent:inline-edit", async (event, { instruction, selectedCode, f
     { role: "user", content: `Selected code:\n\`\`\`\n${selectedCode}\n\`\`\`\n\nInstruction: ${instruction}` }
   ];
 
-  // Inline edit needs highly structural coding, so we default to qwen-coder but allow fallbacks
-  let result = await callPollinationsWithRetry(messages, "qwen-coder");
+  let result = "";
+  try {
+    result = await llmGateway.callLLM(messages, {
+      purpose: 'code',
+      temperature: 0.2,
+      maxTokens: 4096
+    });
+  } catch (err) {
+    console.error("[Agent Inline Edit] LLM call failed:", err);
+    throw err;
+  }
 
   // Clean up: remove markdown fences if present
   result = result.replace(/^```[\w]*\n/, '').replace(/\n```$/, '').trim();
   return { code: result };
+});
+
+// ── AI Provider & Ollama Setup IPC Handlers ──
+ipcMain.handle("ai:get-config", async () => {
+  // Fire off a non-blocking check to keep availability status reasonably fresh
+  llmGateway.checkOllama().catch(() => {});
+  return llmGateway.getProviderConfig();
+});
+
+ipcMain.handle("ai:set-config", async (event, config) => {
+  const updated = llmGateway.setProviderConfig(config);
+  try {
+    const configPath = path.join(app.getPath("userData"), "ai-config.json");
+    await fs.writeFile(configPath, JSON.stringify(updated, null, 2), "utf8");
+  } catch (e) {
+    console.error("Failed to save AI config:", e);
+  }
+  return updated;
+});
+
+ipcMain.handle("ai:check-ollama", async () => {
+  return await llmGateway.checkOllama();
+});
+
+ipcMain.handle("ai:pull-model", async (event, modelName) => {
+  return await llmGateway.pullOllamaModel(modelName, (progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("ai:pull-progress", { modelName, ...progress });
+    }
+  });
 });
 
 // ── Git Command Runner Helper ──
@@ -665,6 +665,17 @@ app.name = "Nova IDE";
 app.setName("Nova IDE");
 
 app.whenReady().then(() => {
+  // Load saved AI config on startup
+  try {
+    const configPath = path.join(app.getPath("userData"), "ai-config.json");
+    if (fsSync.existsSync(configPath)) {
+      const saved = JSON.parse(fsSync.readFileSync(configPath, "utf8"));
+      llmGateway.setProviderConfig(saved);
+    }
+  } catch (e) {
+    console.error("Failed to load saved AI config:", e);
+  }
+
   // DB is NOT initialized here — it's deferred to when a workspace is selected
   createMainWindow();
 

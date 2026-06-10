@@ -47,6 +47,10 @@
             <span id="iconGit"></span>
             <span class="activity-badge hidden" id="gitBadge"></span>
           </button>
+          <button class="activity-btn" data-panel="ollama" title="Ollama & Local AI Status">
+            <span id="iconOllama"></span>
+            <span class="activity-badge hidden" id="ollamaBadge"></span>
+          </button>
         </div>
         <div class="activity-bar-bottom">
           <button class="activity-btn" id="terminalToggleBtn" title="Terminal">
@@ -129,6 +133,67 @@
             <div class="git-section git-commit-section">
               <textarea id="gitCommitInput" class="git-commit-textarea" placeholder="Commit message... (⌘Enter to commit)" autocomplete="off"></textarea>
               <button id="gitCommitBtn" class="git-commit-btn primary-btn"><span id="iconGitCommit"></span>Commit</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Ollama Panel (hidden by default) -->
+        <div class="sidebar-panel hidden" id="ollamaPanel">
+          <div class="sidebar-header">
+            <span class="sidebar-title">OLLAMA SETUP</span>
+          </div>
+          <div class="ollama-panel-content">
+            <!-- Connection Status -->
+            <div class="ollama-section ollama-status-section">
+              <div class="ollama-status-header">
+                <span class="ollama-label">Ollama Service</span>
+                <span id="ollamaStatusBadge" class="ollama-badge offline">Checking...</span>
+              </div>
+              <div id="ollamaStatusDescription" class="ollama-description">
+                Detecting local service at http://localhost:11434...
+              </div>
+              <div class="ollama-actions-row">
+                <button id="ollamaVerifyBtn" class="secondary-btn flex-center">Verify</button>
+                <a href="https://ollama.com" target="_blank" class="primary-btn flex-center text-center no-underline font-medium">Download</a>
+              </div>
+            </div>
+
+            <!-- Model Management / Downloader -->
+            <div class="ollama-section ollama-download-section">
+              <div class="ollama-section-title">Model Downloader</div>
+              <div class="ollama-download-form">
+                <select id="ollamaDownloadSelect" class="ollama-select">
+                  <option value="qwen2.5-coder:7b">qwen2.5-coder:7b (Recommended, 4.7GB)</option>
+                  <option value="llama3.1:8b">llama3.1:8b (Chat Default, 4.7GB)</option>
+                  <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b (For older Macs, 980MB)</option>
+                  <option value="llama3.2:3b">llama3.2:3b (Lightweight Chat, 2.0GB)</option>
+                </select>
+                <button id="ollamaDownloadBtn" class="primary-btn flex-center">Pull Model</button>
+              </div>
+              <!-- Pull Progress Area -->
+              <div id="ollamaPullProgressContainer" class="ollama-progress-container hidden">
+                <div class="ollama-progress-header">
+                  <span id="ollamaPullStatusText">Downloading...</span>
+                  <span id="ollamaPullPercentage">0%</span>
+                </div>
+                <div class="ollama-progress-bar-bg">
+                  <div id="ollamaPullProgressBar" class="ollama-progress-bar-fg" style="width: 0%;"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Installed Models List -->
+            <div class="ollama-section ollama-models-section">
+              <div class="ollama-section-title">Installed Models</div>
+              <div id="ollamaModelsList" class="ollama-models-list">
+                <div class="ollama-empty-state">No models installed or Ollama is offline</div>
+              </div>
+            </div>
+            
+            <!-- Safe Free Cloud Fallback Note -->
+            <div class="ollama-note-section">
+              <div class="ollama-note-title">Free Cloud Fallback Enabled</div>
+              <p class="ollama-note-text">If local Ollama is offline, Nova IDE will automatically fallback to free cloud APIs (Groq / Pollinations) so you can keep working offline/online seamlessly!</p>
             </div>
           </div>
         </div>
@@ -458,16 +523,35 @@
           <!-- AI Agent Pane -->
           <div class="settings-pane" id="pane-ai-agent">
             <label class="control-label">
-              <span>Default AI Model</span>
+              <span>Agent Mode</span>
               <select id="defaultModelSelect" class="control-select">
-                <option value="supernova-v1">SuperNova v1 (Multi-Agent)</option>
-                <option value="gpt-oss-20b">GPT OSS 20B (Simple Chat)</option>
+                <option value="supernova-v1">SuperNova v1 (Multi-Agent Planner/Coder)</option>
+                <option value="gpt-oss-20b">GPT OSS 20B (Single-Agent Chat)</option>
               </select>
             </label>
-            <!-- Hidden inputs to prevent JS exceptions in settings load/save -->
-            <select id="defaultProviderSelect" style="display:none">
-              <option value="pollinations" selected>Pollinations</option>
-            </select>
+            <label class="control-label">
+              <span>Preferred LLM Provider</span>
+              <select id="defaultProviderSelect" class="control-select">
+                <option value="auto">Auto (Ollama if running, else Groq/Pollinations)</option>
+                <option value="ollama">Ollama (Local Offline)</option>
+                <option value="groq">Groq (Fast Cloud API)</option>
+                <option value="pollinations">Pollinations (Free Cloud Backup)</option>
+              </select>
+            </label>
+            <label class="control-label">
+              <span>Groq API Key (Optional Free Key)</span>
+              <input type="password" id="groqApiKeyInput" class="control-input" placeholder="gsk_..." style="background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: var(--text-primary); font-size: 11px; padding: 6px; outline: none; font-family: var(--font-ui);" />
+            </label>
+            <label class="control-label">
+              <span>Ollama Endpoint</span>
+              <input type="text" id="ollamaEndpointInput" class="control-input" placeholder="http://localhost:11434" style="background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; color: var(--text-primary); font-size: 11px; padding: 6px; outline: none; font-family: var(--font-ui);" />
+            </label>
+            <label class="control-label">
+              <span>Local Ollama Model</span>
+              <select id="ollamaModelSelect" class="control-select">
+                <option value="">Auto-Detect (Use default or first available)</option>
+              </select>
+            </label>
             <input type="hidden" id="aiTemperatureInput" value="0.7" />
           </div>
           <!-- Terminal Pane -->
