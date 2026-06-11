@@ -305,9 +305,14 @@
               <span class="ai-brand-dot"></span>
               <span class="ai-title">SuperNova AI</span>
             </div>
-            <div class="ai-status">
-              <span id="agentStatusDot" class="status-dot ready"></span>
-              <span id="agentStatusText" class="status-text">Ready</span>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <button id="aiInstructionBtn" class="ai-instruction-btn" title="AI Integration & Tutorial">
+                <span id="iconAiInstruction"></span>
+              </button>
+              <div class="ai-status">
+                <span id="agentStatusDot" class="status-dot ready"></span>
+                <span id="agentStatusText" class="status-text">Ready</span>
+              </div>
             </div>
           </div>
 
@@ -410,6 +415,54 @@
         <span id="activeFilesCount" class="status-item">0 files</span>
       </div>
     </footer>
+  </div>
+
+  <!-- AI Instruction Modal -->
+  <div id="aiInstructionModal" class="modal hidden">
+    <div class="modal-backdrop" id="aiInstructionModalBackdrop"></div>
+    <div class="modal-content ai-instruction-modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title">SuperNova AI & Ollama Integration Guide</h2>
+        <button id="closeAiInstructionBtn" class="modal-close" title="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="ai-instruction-grid">
+          
+          <div class="ai-instruction-card">
+            <h3>SuperNova v1 Prompt Commands</h3>
+            <p>SuperNova v1 features a multi-agent orchestrator tailored for both chatting and building code:</p>
+            <div style="margin-bottom: 12px;">
+              <span class="ai-instruction-code">/build &lt;instruction&gt;</span>
+              <p style="margin: 4px 0 8px 0; font-size: 11px; color: var(--text-muted);">Runs the multi-agent builder pipeline. SuperNova will automatically plan, view, edit, and verify file changes in your workspace.</p>
+            </div>
+            <div>
+              <span class="ai-instruction-code">/chat &lt;question&gt;</span>
+              <p style="margin: 4px 0 0 0; font-size: 11px; color: var(--text-muted);">Runs single-agent conversational mode. Perfect for explaining code, debugging, or asking general questions without modifying files.</p>
+            </div>
+          </div>
+
+          <div class="ai-instruction-card">
+            <h3>Local Ollama Integration</h3>
+            <p>Run your AI completely local and offline for maximum privacy and performance. The SuperNova pipeline will bridge local Ollama models to read your files and make precise edits.</p>
+            <div style="margin-top: 8px;">
+              <h4 style="margin: 0 0 6px 0; font-size: 12px; color: var(--text-primary);">Quick Setup Checklist:</h4>
+              <ol style="margin: 0; padding-left: 18px; font-size: var(--font-size-sm); color: var(--text-secondary); line-height: 1.5;">
+                <li>Download and install Ollama from <a href="https://ollama.com" target="_blank" style="color: var(--accent);">ollama.com</a>.</li>
+                <li>Make sure Ollama is running in the background (default port 11434).</li>
+                <li>Open the <strong>Ollama Status Panel</strong> on the left side Activity Bar and click <strong>Verify</strong>.</li>
+                <li>Pull a recommended model, e.g. <code>qwen2.5-coder:7b</code> or <code>llama3.1:8b</code>.</li>
+                <li>Switch the Preferred LLM Provider to <strong>Ollama</strong> in your Settings pane.</li>
+              </ol>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="modalStartTourBtn" class="secondary-btn" style="margin-right: auto;">Start Guided Tour</button>
+        <button id="closeAiInstructionFooterBtn" class="primary-btn">Close</button>
+      </div>
+    </div>
   </div>
 
   <!-- Settings Modal -->

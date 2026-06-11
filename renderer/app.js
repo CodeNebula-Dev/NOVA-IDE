@@ -903,6 +903,31 @@ function bindEvents() {
     addChatMessage("system", "❌ Proposed changes rejected. Files on disk were not altered.");
   });
 
+  // AI Instruction & Tutorial Modal
+  const aiInstructionBtn = document.getElementById("aiInstructionBtn");
+  const aiInstructionModal = document.getElementById("aiInstructionModal");
+  const closeAiInstructionBtn = document.getElementById("closeAiInstructionBtn");
+  const closeAiInstructionFooterBtn = document.getElementById("closeAiInstructionFooterBtn");
+  const modalStartTourBtn = document.getElementById("modalStartTourBtn");
+  const aiInstructionModalBackdrop = document.getElementById("aiInstructionModalBackdrop");
+
+  aiInstructionBtn?.addEventListener("click", () => {
+    aiInstructionModal?.classList.remove("hidden");
+  });
+
+  const closeAiInstructionModal = () => {
+    aiInstructionModal?.classList.add("hidden");
+  };
+
+  closeAiInstructionBtn?.addEventListener("click", closeAiInstructionModal);
+  closeAiInstructionFooterBtn?.addEventListener("click", closeAiInstructionModal);
+  aiInstructionModalBackdrop?.addEventListener("click", closeAiInstructionModal);
+
+  modalStartTourBtn?.addEventListener("click", () => {
+    closeAiInstructionModal();
+    startOnboardingTour();
+  });
+
   // Onboarding Guided Tour
   const startTourBtn = document.getElementById("startTourBtn");
   if (startTourBtn) {
@@ -4719,6 +4744,18 @@ const TOUR_STEPS = [
     content: 'The SuperNova AI Panel provides contextual assistance. Use our custom-branded SuperNova v1 multi-agent engine or the GPT OSS 20B model for real-time code execution and chatting.'
   },
   {
+    selector: '[data-panel="ollama"]',
+    content: '<strong>Local AI via Ollama:</strong> Access the local offline AI hub here. Easily view status, pull models, and manage connection profiles in the Activity Bar.'
+  },
+  {
+    selector: '#ollamaPanel',
+    content: '<strong>Ollama Sidebar Panel:</strong> Switch preferred providers to run offline. The SuperNova pipeline will bridge local Ollama models (like <code>qwen2.5-coder:7b</code>) to seamlessly analyze and make code edits.'
+  },
+  {
+    selector: '.chat-composer',
+    content: '<strong>SuperNova Prompt Commands:</strong> Use prefix commands in the chat input. Type <code>/build</code> to trigger the multi-agent task planner & coder to edit files. Use <code>/chat</code> for quick, non-destructive conversations.'
+  },
+  {
     selector: '#terminalPanel',
     content: 'Run and manage processes using the multi-terminal tabbed bar. Spawn multiple terminals and toggle between tabs instantly.'
   }
@@ -4726,11 +4763,20 @@ const TOUR_STEPS = [
 
 let currentTourStep = 0;
 let terminalWasHiddenBeforeTour = false;
+let sidebarWasCollapsedBeforeTour = false;
+let sidebarPanelBeforeTour = 'explorer';
 
 function startOnboardingTour() {
   console.log("🚀 startOnboardingTour called");
   currentTourStep = 0;
   terminalWasHiddenBeforeTour = !state.terminalVisible;
+  
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar) {
+    sidebarWasCollapsedBeforeTour = sidebar.classList.contains('collapsed');
+    const activeBtn = document.querySelector('.activity-btn[data-panel].active');
+    sidebarPanelBeforeTour = activeBtn ? activeBtn.dataset.panel : 'explorer';
+  }
   
   const overlay = document.getElementById('onboardingOverlay');
   if (overlay) {
@@ -4751,6 +4797,35 @@ function showTourStep(stepIndex) {
     els.terminalPanel.classList.remove("hidden");
     if (state.terminals.length === 0) {
       createTerminalInstance();
+    }
+  }
+
+  // Programmatically handle Ollama panel activation during the tour
+  if (step.selector === '#ollamaPanel') {
+    const btn = document.querySelector('.activity-btn[data-panel="ollama"]');
+    const sidebar = document.getElementById('sidebar');
+    const activityBtns = document.querySelectorAll('.activity-btn[data-panel]');
+    
+    activityBtns.forEach(b => {
+      if (b.dataset.panel !== 'ai') b.classList.remove('active');
+    });
+    if (btn) btn.classList.add('active');
+    
+    document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.add('hidden'));
+    document.getElementById('ollamaPanel')?.classList.remove('hidden');
+    if (sidebar && sidebar.classList.contains('collapsed')) {
+      toggleSidebar();
+    }
+    if (typeof checkOllamaStatusInPanel === 'function') {
+      checkOllamaStatusInPanel();
+    }
+  }
+
+  // Ensure AI panel is visible for AI-related steps
+  if (step.selector === '#aiPanel' || step.selector === '.chat-composer') {
+    const aiPanel = document.getElementById('aiPanel');
+    if (aiPanel && aiPanel.classList.contains('hidden')) {
+      toggleAiPanel();
     }
   }
 
@@ -4789,6 +4864,27 @@ function endOnboardingTour() {
     state.terminalVisible = false;
     els.terminalPanel.classList.add("hidden");
   }
+  
+  // Restore sidebar state
+  const sidebar = document.getElementById('sidebar');
+  if (sidebar) {
+    const isCurrentlyCollapsed = sidebar.classList.contains('collapsed');
+    if (sidebarWasCollapsedBeforeTour !== isCurrentlyCollapsed) {
+      toggleSidebar();
+    }
+    
+    // Restore active panel
+    const targetBtn = document.querySelector(`.activity-btn[data-panel="${sidebarPanelBeforeTour}"]`);
+    const activityBtns = document.querySelectorAll('.activity-btn[data-panel]');
+    activityBtns.forEach(b => {
+      if (b.dataset.panel !== 'ai') b.classList.remove('active');
+    });
+    if (targetBtn) targetBtn.classList.add('active');
+    
+    document.querySelectorAll('.sidebar-panel').forEach(p => p.classList.add('hidden'));
+    const panelEl = document.getElementById(`${sidebarPanelBeforeTour}Panel`);
+    if (panelEl) panelEl.classList.remove('hidden');
+  }
 }
 
 function positionHighlight(selector) {
@@ -4825,12 +4921,21 @@ function positionHighlight(selector) {
   if (selector === '.activity-bar') {
     tooltipLeft = rect.right + padding;
     tooltipTop = rect.top + padding;
+  } else if (selector === '[data-panel="ollama"]') {
+    tooltipLeft = rect.right + padding;
+    tooltipTop = rect.top + padding;
+  } else if (selector === '#ollamaPanel') {
+    tooltipLeft = rect.right + padding;
+    tooltipTop = rect.top + padding;
   } else if (selector === '#explorerPanel') {
     tooltipLeft = rect.right + padding;
     tooltipTop = rect.top + padding;
   } else if (selector === '#aiPanel') {
     tooltipLeft = rect.left - tooltipRect.width - padding;
     tooltipTop = rect.top + padding;
+  } else if (selector === '.chat-composer') {
+    tooltipLeft = rect.left - tooltipRect.width - padding;
+    tooltipTop = rect.bottom - tooltipRect.height;
   } else if (selector === '#terminalPanel') {
     tooltipLeft = rect.left + padding;
     tooltipTop = rect.top - tooltipRect.height - padding;
