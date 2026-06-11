@@ -2641,8 +2641,32 @@ async function handleSendToAgent() {
     }
   }
 
+  // Parse command prefixes
+  let cleanPrompt = prompt;
+  let isConversational = false;
+  const selectedAgent = state.selectedAgent || 'supernova-v1';
+  let mode = selectedAgent === 'supernova-v1' ? 'multi-agent' : 'single-agent';
+
+  if (prompt === '/chat' || prompt.startsWith('/chat ')) {
+    cleanPrompt = prompt === '/chat' ? "" : prompt.slice(6).trim();
+    mode = 'single-agent';
+    isConversational = true;
+    console.log("[Nova] Explicit /chat prefix detected.");
+  } else if (prompt === '/build' || prompt.startsWith('/build ')) {
+    cleanPrompt = prompt === '/build' ? "" : prompt.slice(7).trim();
+    mode = 'multi-agent';
+    isConversational = false;
+    console.log("[Nova] Explicit /build prefix detected.");
+  } else {
+    isConversational = isQueryConversational(prompt);
+    if (selectedAgent === 'supernova-v1' && isConversational) {
+      mode = 'single-agent';
+      console.log("[Nova] Routing conversational prompt to chat mode");
+    }
+  }
+
   // Compile enhancedPrompt with active contexts
-  let enhancedPrompt = prompt;
+  let enhancedPrompt = cleanPrompt;
   if (state.chatContexts && state.chatContexts.length > 0) {
     let contextString = "\n\n--- CONTEXT DETAILS ---\n";
     for (const ctx of state.chatContexts) {
@@ -2669,15 +2693,6 @@ async function handleSendToAgent() {
   setAgentBusy(true);
 
   try {
-    // ========== DETERMINE MODE ==========
-    const selectedAgent = state.selectedAgent || 'supernova-v1';
-    let mode = selectedAgent === 'supernova-v1' ? 'multi-agent' : 'single-agent';
-
-    if (selectedAgent === 'supernova-v1' && isQueryConversational(prompt)) {
-      mode = 'single-agent';
-      console.log("[Nova] Routing conversational prompt to chat mode");
-    }
-
     console.log(`[Nova] Sending prompt with mode: ${mode}`);
 
     if (mode === 'multi-agent') {
@@ -2686,7 +2701,6 @@ async function handleSendToAgent() {
     } else {
       // ========== SINGLE AGENT MODE (GPT OSS 20B / SuperNova v1) ==========
       const agentLabel = selectedAgent === 'supernova-v1' ? 'SuperNova v1' : 'GPT OSS 20B';
-      const isConversational = isQueryConversational(prompt);
       await handleSingleAgentExecution(enhancedPrompt, agentLabel, isConversational);
     }
 
@@ -3475,25 +3489,24 @@ function createValkyrieCard(userPrompt) {
   card.className = "message valkyrie-message";
   card.innerHTML = `
     <div class="valkyrie-header">
-      <span class="valkyrie-icon">⚡</span>
       <span>Valkyrie Engine</span>
       <button class="abort-btn">Abort</button>
     </div>
     <div class="valkyrie-thought-section">
       <div class="thought-header-row" style="display: flex; justify-content: space-between; align-items: center; user-select: none;">
-        <div class="thought-title" data-model="SuperNova" style="flex: 1; padding: 8px 12px; font-size: var(--font-size-sm); font-weight: 500; color: var(--text-secondary); background: var(--bg-base); cursor: pointer; display: flex; align-items: center; gap: 6px; transition: background var(--transition-fast);">▼ Thought Logs (SuperNova)</div>
+        <div class="thought-title" data-model="SuperNova" style="flex: 1; padding: 8px 12px; font-size: var(--font-size-sm); font-weight: 500; color: var(--text-secondary); background: var(--bg-base); cursor: pointer; display: flex; align-items: center; gap: 6px; transition: background var(--transition-fast);">v Thought Logs (SuperNova)</div>
         <div class="thought-controls" style="display: flex; gap: 8px; font-size: 0.72rem; align-items: center; background: var(--bg-base); padding: 8px 12px 8px 0;">
-          <button class="thought-expand-btn" style="display: block; background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 6px; font-family: var(--font-ui); font-size: 0.72rem; border-radius: var(--radius-sm); border: 1px solid var(--border);">↕ Expand</button>
+          <button class="thought-expand-btn" style="display: block; background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 6px; font-family: var(--font-ui); font-size: 0.72rem; border-radius: var(--radius-sm); border: 1px solid var(--border);">Expand</button>
         </div>
       </div>
       <div class="thought-content"></div>
     </div>
     <div class="valkyrie-plan-section hidden">
       <div class="plan-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; user-select: none;">
-        <span class="section-title" style="margin: 0; cursor: pointer;">📋 Execution Plan</span>
+        <span class="section-title" style="margin: 0; cursor: pointer;">Execution Plan</span>
         <div class="plan-controls" style="display: flex; gap: 8px; font-size: 0.72rem; align-items: center;">
-          <button class="plan-expand-btn" style="background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 6px; font-family: var(--font-ui); font-size: 0.72rem; border-radius: var(--radius-sm); border: 1px solid var(--border);">↕ Expand</button>
-          <span class="plan-collapse-arrow" style="cursor: pointer; color: var(--text-muted); font-size: 0.75rem;">▼</span>
+          <button class="plan-expand-btn" style="background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 6px; font-family: var(--font-ui); font-size: 0.72rem; border-radius: var(--radius-sm); border: 1px solid var(--border);">Expand</button>
+          <span class="plan-collapse-arrow" style="cursor: pointer; color: var(--text-muted); font-size: 0.75rem;">v</span>
         </div>
       </div>
       <div class="plan-list-wrapper">
@@ -3502,10 +3515,10 @@ function createValkyrieCard(userPrompt) {
     </div>
     <div class="valkyrie-diff-section hidden">
       <div class="diff-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; user-select: none;">
-        <span class="section-title" style="margin: 0; cursor: pointer;">🔍 Surgical Diffs</span>
+        <span class="section-title" style="margin: 0; cursor: pointer;">Surgical Diffs</span>
         <div class="diff-controls" style="display: flex; gap: 8px; font-size: 0.72rem; align-items: center;">
-          <button class="diff-expand-btn" style="background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 6px; font-family: var(--font-ui); font-size: 0.72rem; border-radius: var(--radius-sm); border: 1px solid var(--border);">↕ Expand</button>
-          <span class="diff-collapse-arrow" style="cursor: pointer; color: var(--text-muted); font-size: 0.75rem;">▼</span>
+          <button class="diff-expand-btn" style="background: none; border: none; color: var(--accent); cursor: pointer; padding: 2px 6px; font-family: var(--font-ui); font-size: 0.72rem; border-radius: var(--radius-sm); border: 1px solid var(--border);">Expand</button>
+          <span class="diff-collapse-arrow" style="cursor: pointer; color: var(--text-muted); font-size: 0.75rem;">v</span>
         </div>
       </div>
       <div class="diff-content-wrapper">
@@ -3513,7 +3526,6 @@ function createValkyrieCard(userPrompt) {
       </div>
     </div>
     <div class="valkyrie-status-bar">
-      <span class="status-dot pulsing"></span>
       <span class="status-text">Orchestrator preparing...</span>
     </div>
   `;
@@ -3526,7 +3538,7 @@ function createValkyrieCard(userPrompt) {
   const toggleThoughtCollapse = () => {
     const isClosed = thoughtSection.classList.toggle("closed");
     const model = thoughtTitle.dataset.model || 'SuperNova';
-    thoughtTitle.textContent = isClosed ? `▶ Thought Logs (${model})` : `▼ Thought Logs (${model})`;
+    thoughtTitle.textContent = isClosed ? `> Thought Logs (${model})` : `v Thought Logs (${model})`;
     if (thoughtExpandBtn) {
       thoughtExpandBtn.style.display = isClosed ? "none" : "block";
     }
@@ -3637,7 +3649,7 @@ function updateActiveValkyrieCard(type, data) {
     if (thoughtSection.classList.contains("closed") && isFirstThoughtChunk) {
       thoughtSection.classList.remove("closed");
       const model = activeValkyrieCard.querySelector(".thought-title").dataset.model || 'SuperNova';
-      activeValkyrieCard.querySelector(".thought-title").textContent = `▼ Thought Logs (${model})`;
+      activeValkyrieCard.querySelector(".thought-title").textContent = `v Thought Logs (${model})`;
       const thoughtExpandBtn = activeValkyrieCard.querySelector(".thought-expand-btn");
       if (thoughtExpandBtn) {
         thoughtExpandBtn.style.display = "block";
@@ -3671,12 +3683,12 @@ function updateActiveValkyrieCard(type, data) {
       li.className = `plan-item ${task.status || 'pending'}`;
       li.id = `plan-item-${task.id}`;
       
-      let icon = "⬜";
-      if (task.status === 'completed') icon = "✅";
-      else if (task.status === 'in-progress') icon = "⚡";
-      else if (task.status === 'failed') icon = "❌";
+      let statusLabel = "[Pending]";
+      if (task.status === 'completed') statusLabel = "[Done]";
+      else if (task.status === 'in-progress') statusLabel = "[Running]";
+      else if (task.status === 'failed') statusLabel = "[Failed]";
       
-      li.innerHTML = `<span class="status-icon">${icon}</span> <span>${task.description} <code style="font-size:0.7rem; opacity:0.7">(${task.assignedFile})</code></span>`;
+      li.innerHTML = `<span class="status-icon" style="font-family:var(--font-mono); margin-right:6px;">${statusLabel}</span> <span>${task.description} <code style="font-size:0.7rem; opacity:0.7">(${task.assignedFile})</code></span>`;
       planList.appendChild(li);
     }
     // Automatically keep the user scrolling down as plan is formed
@@ -3689,11 +3701,11 @@ function updateActiveValkyrieCard(type, data) {
       item.className = `plan-item ${data.status}`;
       const iconSpan = item.querySelector(".status-icon");
       if (iconSpan) {
-        let icon = "⬜";
-        if (data.status === 'completed') icon = "✅";
-        else if (data.status === 'in-progress') icon = "⚡";
-        else if (data.status === 'failed') icon = "❌";
-        iconSpan.textContent = icon;
+        let statusLabel = "[Pending]";
+        if (data.status === 'completed') statusLabel = "[Done]";
+        else if (data.status === 'in-progress') statusLabel = "[Running]";
+        else if (data.status === 'failed') statusLabel = "[Failed]";
+        iconSpan.textContent = statusLabel;
       }
     }
     // Scroll chat to keep up with active task updates
@@ -3726,7 +3738,7 @@ function updateActiveValkyrieCard(type, data) {
     if (data.approved) {
       statusBarText.textContent = `Llama 3.3 approved changes (Score: ${data.score}/100)`;
     } else {
-      statusBarText.textContent = `⚠️ Attempt ${data.attempt} failed verification: ${data.feedback.slice(0, 60)}...`;
+      statusBarText.textContent = `Attempt ${data.attempt} failed verification: ${data.feedback.slice(0, 60)}...`;
       // Append a small warning below the item
       const item = activeValkyrieCard.querySelector(`#plan-item-${data.taskId}`);
       if (item) {
@@ -3749,19 +3761,19 @@ function updateActiveValkyrieCard(type, data) {
   
   else if (type === 'error') {
     const statusBar = activeValkyrieCard.querySelector(".valkyrie-status-bar");
-    statusBar.innerHTML = `<span class="status-dot" style="background:var(--danger)"></span> <span style="color:var(--danger)">Error: ${data}</span>`;
+    statusBar.innerHTML = `<span style="color:var(--danger); font-weight:bold;">[Error]</span> ${data}`;
     activeValkyrieCard.querySelector(".abort-btn").classList.add("hidden");
   }
   
   else if (type === 'completed') {
     const statusBar = activeValkyrieCard.querySelector(".valkyrie-status-bar");
-    statusBar.innerHTML = `<span class="status-dot" style="background:var(--good)"></span> <span style="color:var(--good)">Execution Completed Successfully!</span>`;
+    statusBar.innerHTML = `<span style="color:var(--good); font-weight:bold;">[Completed]</span> Execution Completed Successfully!`;
     activeValkyrieCard.querySelector(".abort-btn").classList.add("hidden");
     
     // Close the thought logs to save vertical space
     activeValkyrieCard.querySelector(".valkyrie-thought-section").classList.add("closed");
     const model = activeValkyrieCard.querySelector(".thought-title").dataset.model || 'SuperNova';
-    activeValkyrieCard.querySelector(".thought-title").textContent = `▶ Thought Logs (${model})`;
+    activeValkyrieCard.querySelector(".thought-title").textContent = `> Thought Logs (${model})`;
     const thoughtExpandBtn = activeValkyrieCard.querySelector(".thought-expand-btn");
     if (thoughtExpandBtn) {
       thoughtExpandBtn.style.display = "none";
@@ -3795,7 +3807,7 @@ function updateActiveValkyrieCard(type, data) {
     if (thoughtTitle) {
       const isClosed = activeValkyrieCard.querySelector(".valkyrie-thought-section").classList.contains("closed");
       thoughtTitle.dataset.model = data;
-      thoughtTitle.textContent = (isClosed ? "▶" : "▼") + ` Thought Logs (${data})`;
+      thoughtTitle.textContent = (isClosed ? ">" : "v") + ` Thought Logs (${data})`;
     }
   }
   
